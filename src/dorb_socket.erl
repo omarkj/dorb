@@ -125,7 +125,6 @@ handle_cast(_Cast, State) ->
 handle_info({tcp, Socket, Bin}, #state{socket=Socket,
 				       buffer=Buffer,
 				       corrids=CorrIds}=State) ->
-    inet:setopts(Socket, [{active,once}]),
     {Messages, CorrIds1, Tail} = parse_incoming(<<Buffer/binary, Bin/binary>>,
 						CorrIds, []),
     notify(Messages),
