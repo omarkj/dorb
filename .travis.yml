@@ -1,0 +1,12 @@
+sudo: false
+language: erlang
+env:
+  - PATH=$HOME/.cache/rebar3/bin/:$PATH
+otp_release:
+  - 18.0
+before_script:
+  - curl -o /tmp/rebar3 https://s3.amazonaws.com/rebar3/rebar3
+  - chmod +x /tmp/rebar3
+  - /tmp/rebar3 unstable install
+  - rebar3 update
+script: "rebar3 do dialyzer,eunit"
