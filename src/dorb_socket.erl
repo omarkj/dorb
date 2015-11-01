@@ -21,11 +21,13 @@
 	  port :: inet:port_number(),
 	  socket :: gen_tcp:socket()|undefined,
 	  buffer = <<>> :: binary(),
-	  corrid = 0 :: non_neg_integer(),
+	  corrid = 1 :: non_neg_integer(),
+	  sock_opts :: [],
 	  corrids = #{} :: #{}
 	 }).
 
 -record(waiter, {
+	  corr_id :: integer(),
 	  api_key :: integer(),
 	  caller :: pid(),
 	  caller_ref :: reference(),
@@ -46,7 +48,6 @@
 	 terminate/2,
 	 code_change/3]).
 
-
 % API implementation
 -spec start_link({Host, Port}) -> {ok, Pid} when
       Host :: inet:ip_address()|inet:hostname(),
@@ -63,7 +64,7 @@ stop(Connection) ->
 -spec send(Connection, Msg) ->
 		  {ok, Ref} when
       Connection :: pid(),
-      Msg :: term(),
+      Msg :: dorb_msg:msg(),
       Ref :: reference().
 send(Connection, Msg) ->
     gen_server:call(Connection, {send, self(), Msg}).
@@ -71,9 +72,9 @@ send(Connection, Msg) ->
 -spec send_sync(Connection, Msg, Timeout) -> {ok, Message}|
 					     {error, timeout} when
       Connection :: pid(),
-      Msg :: term(),
+      Msg :: dorb_msg:msg(),
       Timeout :: integer(),
-      Message :: term().
+      Message :: dorb_parser:reply().
 send_sync(Connection, Msg, Timeout) ->
     {ok, Ref} = send(Connection, Msg),
     receive
@@ -89,25 +90,27 @@ init([{Host, Port}]) ->
     {ok, #state{host = Host,
 		port = Port}}.
 
-handle_call({send, Sender, Msg}, From, #state{corrid=CorrId,
-					      socket=Socket,
-					      host=Host,
-					      port=Port,
-					      corrids=CorrIds}=State) ->
+handle_call({send, Sender, {ApiKey, Msg}}, From,
+	    #state{corrid=CorrId,
+		   socket=Socket,
+		   host=Host,
+		   port=Port,
+		   corrids=CorrIds}=State) ->
     Ref = erlang:make_ref(),
     gen_server:reply(From, {ok, Ref}),
     case maybe_connect(Socket, Host, Port) of
-	{ok, Socket} ->
-	    NextCorrId = CorrId + 1,
-	    case send_message(Socket, Msg, NextCorrId) of
+	{ok, Socket1} ->
+	    EncodedMsg = dorb_parser:encode(ApiKey, <<"dorb">>, CorrId,
+					    Msg),
+	    case send_message(Socket1, EncodedMsg) of
 		ok ->
-		    Waiter = #waiter{ api_key = 0,
-				      caller = Sender,
-				      caller_ref = Ref },
+		    Waiter = #waiter{api_key = ApiKey,
+				     caller = Sender,
+				     caller_ref = Ref},
 		    {noreply,
-		     State#state{socket=Socket,
-				 corrid=NextCorrId,
-				 corrids=CorrIds#{NextCorrId=>Waiter}}};
+		     State#state{socket=Socket1,
+				 corrid=next_corr_id(CorrId),
+				 corrids=CorrIds#{CorrId=>Waiter}}};
 		{error, _Reason} ->
 		    {stop, normal, State}
 	    end;
@@ -128,6 +131,7 @@ handle_info({tcp, Socket, Bin}, #state{socket=Socket,
     {Messages, CorrIds1, Tail} = parse_incoming(<<Buffer/binary, Bin/binary>>,
 						CorrIds, []),
     notify(Messages),
+    inet:setopts(Socket, [{active, once}]),
     {noreply, State#state{buffer=Tail,
 			  corrids=CorrIds1}};
 handle_info({tcp_error, Socket, _Reason}, #state{socket=Socket}=State) ->
@@ -151,14 +155,21 @@ terminate(_Reason, #state{socket=Socket}) ->
     ok.
 
 % Internals
-maybe_connect(undefined, Host, Port) ->
-    gen_tcp:connect(Host, Port, [{active, false}], 5000);
-maybe_connect(Socket, _, _) ->
-    Socket.
+next_corr_id(2147483647) ->
+    1;
+next_corr_id(CorrId) ->
+    CorrId + 1.
 
-send_message(Socket, Message, _NextCorrId) ->
+-spec maybe_connect(undefined|port(), inet:ip_address()|inet:hostname(),
+		    Port :: inet:port_number()) -> {ok, port()}|{error, term()}.
+maybe_connect(undefined, Host, Port) ->
+    gen_tcp:connect(Host, Port, [{active, once}, {packet, raw}, binary], 5000);
+maybe_connect(Socket, _, _) ->
+    {ok, Socket}.
+
+send_message(Socket, Message) ->
     gen_tcp:send(Socket, Message),
-    inet:setopts(Socket, [{active,once}]).
+    inet:setopts(Socket, [{active, once}]).
 
 -spec notify([#waiter{}]) -> ok.
 notify([#waiter{caller=Pid, caller_ref=Ref,
@@ -188,17 +199,68 @@ parse_incoming(Buffer, CorrIds, Acc) ->
       Message :: binary(),
       CorrIds :: #{},
       Acc :: [#waiter{}].
-parse_message(<<CorrId:32/signed-integer, Message/binary>>,
-	      CorrIds, Acc) ->
+parse_message(<<CorrId:32/signed-integer, Msg1/binary>>, CorrIds, Acc) ->
     case maps:find(CorrId, CorrIds) of
 	{ok, #waiter{api_key=ApiKey}=Waiter} ->
 	    % Parsed a message and found a corresponding CorrId. Add it to the
 	    % Acc and move parse some more.
+	    {ok, ParsedMessage} = dorb_parser:parse(ApiKey, Msg1),
 	    CorrIds1 = maps:remove(CorrId, CorrIds),
-	    ParsedMessage = dorb_parser:parse(ApiKey, Message),
 	    {CorrIds1, [Waiter#waiter{message=ParsedMessage}|Acc]};
 	error ->
 	    % Parsed a message, but there is no corresponding CorrId in the map,
 	    % throw the message away and move on.
 	    {CorrIds, Acc}
     end.
+
+-include_lib("eunit/include/eunit.hrl").
+-ifdef(TEST).
+
+next_corr_id_test() ->
+    ?assertEqual(2, next_corr_id(1)),
+    ?assertEqual(1, next_corr_id(2147483647)).
+
+notify_test() ->
+    Ref1 = erlang:make_ref(),
+    Ref2 = erlang:make_ref(),
+    ?assertEqual(ok, notify([#waiter{caller=self(),
+				     caller_ref=Ref1,
+				     message=test1},
+			     #waiter{caller=self(),
+				     caller_ref=Ref2,
+				     message=test2}
+			    ])),
+    receive
+	Res1 ->
+	    ?assertEqual({dorb_msg, Ref1, test1}, Res1),
+	    receive
+		Res2 ->
+		    ?assertEqual({dorb_msg, Ref2, test2}, Res2)
+	    end
+    end.
+
+parse_incoming_skips_partial_messages_test() ->
+    Buf = <<22:32/signed, "not-a-full-message">>,
+    ?assertEqual({[], #{}, Buf}, parse_incoming(Buf, #{}, [])).
+
+parse_incoming_can_parse_many_test() ->
+    Buf = <<6:32/signed, 1:32/signed, 0,0,
+	    6:32/signed, 2:32/signed, 0,0>>,
+    CorrIds = #{1 => #waiter{api_key=12},
+		2 => #waiter{api_key=12}},
+    ?assertEqual({[#waiter{api_key=12,
+			   message=#{error_code => 0}},
+		   #waiter{api_key=12,
+			   message=#{error_code => 0}}], #{}, <<>>},
+		 parse_incoming(Buf, CorrIds, [])).
+
+parse_incoming_parses_portions_if_needed_test() ->
+    Buf = <<6:32/signed, 1:32/signed, 0,0,
+	    8:32/signed, 2:32/signed, 0,0>>,
+    CorrIds = #{1 => #waiter{api_key=12}},
+    ?assertEqual({[#waiter{api_key=12,
+			   message=#{error_code => 0}}], #{},
+		  <<8:32/signed, 2:32/signed, 0,0>>},
+		 parse_incoming(Buf, CorrIds, [])).
+
+-endif.

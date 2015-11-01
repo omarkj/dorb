@@ -31,9 +31,11 @@
 		       {message_set, [message()]}].
 -type parse_spec() :: [{term(), string|bytes|int64|int32|int16|int8|
 		       parse_spec()}].
+-type reply() :: #{}.
 
 -export_type([api_key/0,
-	      encode_spec/0]).
+	      encode_spec/0,
+	      reply/0]).
 
 -spec parse(ApiKey, Message) ->
 		   {ok, ParsedMessage} when
@@ -73,23 +75,27 @@ parse(2, OffsetResponse) ->
     {Resp, <<>>} = parse(OffsetResponse, Spec, #{}),
     {ok, Resp};
 parse(3, MetadataResponse) ->
-    Spec = [{brokers, [{broker,
-			[{node_id, int32},
-			 {host, string},
-			 {port, int32}]}]},
-	    {topic_metadata,
-	     [{topic_error_code, int16},
-	      {topic_name, string},
-	      {partition_metadata,
-	       [{partition_error_code, int16},
-		{partition_id, int32},
-		{leader, int32},
-		{replicas, [{id, int32}]},
-		{isr, [{id, int32}]}
-	       ]}
-	     ]}],
-    {Resp, <<>>} = parse(MetadataResponse, Spec, #{}),
-    {ok, Resp};
+    BrokerSpec = [{brokers,
+		   [{node_id, int32},
+		    {host, string},
+		    {port, int32}]}],
+    TopicMetadataSpec = [{topic_metadata,
+    			  [{topic_error_code, int16},
+    			   {topic_name, string},
+    			   {partition_metadata,
+    			    [{partition_error_code, int16},
+    			     {partition_id, int32},
+    			     {leader, int32},
+    			     {replicas,
+    			      [{id, int32}]},
+    			     {isr, 
+    			     [{id, int32}]}]}]
+    			 }],
+    {#{brokers := Brokers}, Res} = parse(MetadataResponse, BrokerSpec, #{}),
+    {#{topic_metadata := TopicsMetadata}, <<>>} =
+	parse(Res, TopicMetadataSpec, #{}),
+    {ok, #{brokers => Brokers,
+	   topics_metadata => TopicsMetadata}};
 parse(8, OffsetCommitResponse) ->
     Spec = [{topics,
 	     [{topic_name, string},
@@ -329,24 +335,22 @@ parse_offset_test() ->
 		dorb_parser:parse(2, OffsetResp)).
 
 parse_metadata_test() ->
-    Metadata = <<0,0,0,1,0,0,0,1,0,0,0,0,0,11,49,57,50,46,49,54,56,46,48,46,52,
-		 0,0,35,132,0,0, 0,1,0,0,0,4,116,101,115,116,0,0,0,1,0,0,0,0,0,
-		 0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0>>,
+    Metadata = <<0,0,0,1,0,0,0,0,0,11,49,57,50,46,49,54,56,46,48,46,52,0,0,35,
+		 132,0,0,0,1,0,0,0,4,116,101,115,116,0,0,0,1,0,0,0,0,0,0,0,0,0,
+		 0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0>>,
     ?assertEqual({ok, #{brokers =>
-			   [#{broker =>
-				 [#{host => <<"192.168.0.4">>,
-				    node_id => 0,
-				    port => 9092}]}],
-		       topic_metadata =>
-			   [#{partition_metadata =>
-				 [#{isr => [#{id => 0}],
-				    leader => 0,
-				    partition_error_code => 0,
-				    partition_id => 0,
-				    replicas => [#{id => 0}]}],
-			     topic_error_code => 0,
-			     topic_name => <<"test">>}]}},
-		parse(3, Metadata)).
+			   [#{host => <<"192.168.0.4">>,
+			      node_id => 0,
+			      port => 9092}],
+			topics_metadata =>
+			    [#{partition_metadata =>
+				  [#{isr => [#{id => 0}],
+				     leader => 0,
+				     partition_error_code => 0,
+				     partition_id => 0,
+				     replicas => [#{id => 0}]}],
+			      topic_error_code => 0,
+			      topic_name => <<"test">>}]}}, parse(3, Metadata)).
 
 parse_offset_commit_test() ->
     OffsetCommit = <<0,0,0,1,0,4,116,101,115,116,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,
