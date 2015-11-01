@@ -7,6 +7,11 @@
 
 -compile(export_all). % @todo REMOVE ME
 
+-type req() :: {dorb_parser:api_command(),
+		dorb_parser:encode_spec()}.
+
+-export_type([req/0]).
+
 %% Message
 message(Key, Value) ->
     {message, message(0, Key, Value)}.
@@ -97,7 +102,8 @@ offset_topics([{TopicName, OffsetDetails}|Rest], Acc) ->
       ApiKey :: 3,
       EncodedMsg :: dorb_parser:encode_spec().
 topic_metadata(Topics) ->
-    {3, topic_metadata(Topics, [])}.
+    {3, [{array, [[{string, Topic}]
+		 || Topic <- Topics]}]}.
 
 %% Consumer Group API
 group_metadata(GroupId) ->
