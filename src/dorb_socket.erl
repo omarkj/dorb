@@ -212,3 +212,55 @@ parse_message(<<CorrId:32/signed-integer, Msg1/binary>>, CorrIds, Acc) ->
 	    % throw the message away and move on.
 	    {CorrIds, Acc}
     end.
+
+-include_lib("eunit/include/eunit.hrl").
+-ifdef(TEST).
+
+next_corr_id_test() ->
+    ?assertEqual(2, next_corr_id(1)),
+    ?assertEqual(1, next_corr_id(2147483647)).
+
+notify_test() ->
+    Ref1 = erlang:make_ref(),
+    Ref2 = erlang:make_ref(),
+    ?assertEqual(ok, notify([#waiter{caller=self(),
+				     caller_ref=Ref1,
+				     message=test1},
+			     #waiter{caller=self(),
+				     caller_ref=Ref2,
+				     message=test2}
+			    ])),
+    receive
+	Res1 ->
+	    ?assertEqual({dorb_msg, Ref1, test1}, Res1),
+	    receive
+		Res2 ->
+		    ?assertEqual({dorb_msg, Ref2, test2}, Res2)
+	    end
+    end.
+
+parse_incoming_skips_partial_messages_test() ->
+    Buf = <<22:32/signed, "not-a-full-message">>,
+    ?assertEqual({[], #{}, Buf}, parse_incoming(Buf, #{}, [])).
+
+parse_incoming_can_parse_many_test() ->
+    Buf = <<6:32/signed, 1:32/signed, 0,0,
+	    6:32/signed, 2:32/signed, 0,0>>,
+    CorrIds = #{1 => #waiter{api_key=12},
+		2 => #waiter{api_key=12}},
+    ?assertEqual({[#waiter{api_key=12,
+			   message=#{error_code => 0}},
+		   #waiter{api_key=12,
+			   message=#{error_code => 0}}], #{}, <<>>},
+		 parse_incoming(Buf, CorrIds, [])).
+
+parse_incoming_parses_portions_if_needed_test() ->
+    Buf = <<6:32/signed, 1:32/signed, 0,0,
+	    8:32/signed, 2:32/signed, 0,0>>,
+    CorrIds = #{1 => #waiter{api_key=12}},
+    ?assertEqual({[#waiter{api_key=12,
+			   message=#{error_code => 0}}], #{},
+		  <<8:32/signed, 2:32/signed, 0,0>>},
+		 parse_incoming(Buf, CorrIds, [])).
+
+-endif.
