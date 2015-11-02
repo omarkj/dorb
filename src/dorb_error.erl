@@ -78,4 +78,7 @@ error(15) ->
 error(16) ->
     % The broker returns this error code if it receives an offset fetch or
     % commit request for a consumer group that it is not a coordinator for.
-    not_coordinator_for_consumer.
+    not_coordinator_for_consumer;
+error(26) ->
+    invalid_timeout.
+

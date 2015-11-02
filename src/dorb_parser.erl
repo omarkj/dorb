@@ -101,8 +101,8 @@ parse(8, OffsetCommitResponse) ->
 	     [{topic_name, string},
 	      {partitions,
 	       [{partition, int32},
-		{error_code, int16},
-		{unknown, int64} % No idea what this is, but it's there...
+		{error_code, int16}
+		% {unknown, int64} % No idea what this is, but it's there...
 	       ]}
 	     ]}],
     {Resp, <<>>} = parse(OffsetCommitResponse, Spec, #{}),
