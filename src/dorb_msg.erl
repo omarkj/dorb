@@ -13,6 +13,10 @@
 -export_type([req/0]).
 
 %% Message
+-spec message(Key, Value) ->
+		     term() when
+      Key :: binary(),
+      Value :: binary().
 message(Key, Value) ->
     {message, message(0, Key, Value)}.
 
@@ -23,7 +27,7 @@ message(Attributes, Key, Value) ->
     {bytes, Value}].
 
 message_set(Messages) ->
-    {message_set, [Messages]}.
+    {message_set, Messages}.
 
 %% Produce API
 produce(RequiredAcks, Timeout, Topics) ->

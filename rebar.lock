@@ -1,1 +1,5 @@
-[].
+[{<<"episcina">>,
+  {git,"https://github.com/erlware/episcina.git",
+       {ref,"77304e8bd45c19832887175327a780bc0bb72802"}},
+  0},
+ {<<"gproc">>,{pkg,<<"gproc">>,<<"0.3.1">>},1}].
