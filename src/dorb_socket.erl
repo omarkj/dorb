@@ -171,7 +171,10 @@ next_corr_id(CorrId) ->
 -spec maybe_connect(undefined|port(), inet:ip_address()|inet:hostname(),
 		    Port :: inet:port_number()) -> {ok, port()}|{error, term()}.
 maybe_connect(undefined, Host, Port) ->
-    gen_tcp:connect(Host, Port, [{active, once}, {packet, raw}, binary], 5000);
+    gen_tcp:connect(Host, Port, [{active, once}, {packet, raw}, binary,
+				 {keepalive, true},
+				 {packet, raw},
+				 {nodelay, true}], 5000);
 maybe_connect(Socket, _, _) ->
     {ok, Socket}.
 
