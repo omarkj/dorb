@@ -76,10 +76,9 @@ join_response({ok, #{error_code := 0,
 		     consumer_id := ConsumerId,
 		     group_generation_id := GGI,
 		     partitions_to_own := PTO}}) ->
-    PTO1 = [{Topic, [Partition
-		     || #{partition :=Partition} <- Partitions]}
-	    || {#{topic_name := Topic,
-		  partitions := Partitions}} <- PTO],
+
+    PTO1 = [{TopicName, [Partition || #{partition := Partition} <- Partitions]}
+	    || #{topic_name := TopicName, partitions := Partitions} <- PTO],
     {ok, #{consumer_id => ConsumerId,
 	   ggi => GGI,
 	   pto => PTO1}};
@@ -103,6 +102,7 @@ metadata_response(Error) ->
 
 %% These tests require Kafka running on localhost (9092)
 
+%     [#{partitions => [#{partition => 0}],topic_name => <<"test">>}]
 %% metadata_test() ->
 %%     {ok, Socket} = dorb_socket:start_link({"localhost", 9092}),
 %%     ?assertMatch({_, _}, metadata(Socket, <<"MetaDataTestGroup">>, 1000)),

@@ -66,22 +66,17 @@ handle_call({send, Topic, Messages}=Send, From,
     case prepare_send(Topic, lists:reverse(Messages), Partitioner, RequiredAcks,
 		      Timeout, MetadataForTopic) of
 	{error, refresh_metadata} ->
-	    case dorb_connection:get_socket(Hosts) of
-		{Pool, {ok, Socket}} ->
-		    {NodeIds1, MetadataForTopic1} =
-			metadata_for_topics(Socket, [Topic]),
-		    dorb_connection:return_socket(Pool, Socket),
-		    ok = dorb_connection:maybe_start_pools(NodeIds1),
-		    % question: maybe remove a tuple with the same name if exists in
-		    % the topics metadata list?
-		    TopicsMetadata1 = TopicsMetadata ++ MetadataForTopic1,
-		    handle_call(Send, From,
-				State#state{topics_metadata = TopicsMetadata1,
-					    node_ids = NodeIds1});
-		{error, timeout} ->
-		    % Unable to fetch metadata. Shutdown
-		    {stop, normal, State}
-	    end;
+	    {ok, Socket} = dorb_connection:get_socket(Hosts),
+	    {NodeIds1, MetadataForTopic1} =
+		metadata_for_topics(Socket, [Topic]),
+	    dorb_connection:return_socket(Socket),
+	    ok = dorb_connection:maybe_start_pools(NodeIds1),
+            % question: maybe remove a tuple with the same name if exists in
+	    % the topics metadata list?
+	    TopicsMetadata1 = TopicsMetadata ++ MetadataForTopic1,
+	    handle_call(Send, From,
+			State#state{topics_metadata = TopicsMetadata1,
+				    node_ids = NodeIds1});
 	EncodedMessages ->
 	    Reply = send_(EncodedMessages, NodeIds, []),
 	    {reply, Reply, State}

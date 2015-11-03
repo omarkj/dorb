@@ -3,7 +3,8 @@
 -export([start_connection/1,
 	 start_connection/2,
 	 get_socket/1,
-	 get_socket/2,
+	 % get_socket/2,
+	 return_socket/1,
 	 return_socket/2,
 	 return_socket/3,
 	 maybe_start_pools/1
@@ -17,22 +18,29 @@ start_connection(ClusterName, [Pair|Rest]) ->
 start_connection(_, []) ->
     ok.
 
-get_socket(Pair) ->
-    get_socket(default, Pair).
+get_socket([Host|_]) ->
+    get_socket(Host);
+get_socket(Host) ->
+    dorb_socket:start(Host).
 
-get_socket(_, []) ->
-    {error, timeout};
-get_socket(ClusterName, [Pair|Rest]) ->
-    case get_socket(ClusterName, Pair) of
-    	{ok, Pid} ->
-    	    {Pair, {ok, Pid}};
-    	{error, timeout} ->
-    	    get_socket(ClusterName, Rest)
-    end;
-get_socket(ClusterName, {Host, Port}) when is_binary(Host) ->
-    get_socket(ClusterName, {binary_to_list(Host), Port});
-get_socket(ClusterName, Pair) ->
-    episcina:get_connection({ClusterName, Pair}).
+return_socket(Socket) ->
+    dorb_socket:stop(Socket).
+
+%% get_socket(Pair) ->
+%%     get_socket(default, Pair).
+%% get_socket(_, []) ->
+%%     {error, timeout};
+%% get_socket(ClusterName, [Pair|Rest]) ->
+%%     case get_socket(ClusterName, Pair) of
+%%     	{ok, Pid} ->
+%%     	    {Pair, {ok, Pid}};
+%%     	{error, timeout} ->
+%%     	    get_socket(ClusterName, Rest)
+%%     end;
+%% get_socket(ClusterName, {Host, Port}) when is_binary(Host) ->
+%%     get_socket(ClusterName, {binary_to_list(Host), Port});
+%% get_socket(ClusterName, Pair) ->
+%%     episcina:get_connection({ClusterName, Pair}).
 
 return_socket(Pair, Socket) ->
     return_socket(default, Pair, Socket).

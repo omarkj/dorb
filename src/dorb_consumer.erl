@@ -1,35 +1,8 @@
 -module(dorb_consumer).
-
-% The Dorb Consumer is supposed to be similar to the Kafka High Level consumer.
-% It interfaces with Kafka's Consumer Group API, gathering information on
-% partitions it is responsible for.
-% The consumer group needs to be able to manage connections to make sure no
-% messages are consumed when the group is inactive.
-
 -behaviour(gen_fsm).
 
--record(state, {
-	  hosts :: dorb:hosts(),
-	  group_id :: binary(),
-	  topics :: [binary()],
-	  coordinator :: dorb:host(),
-	  session_timeout :: non_neg_integer(),
-	  consumer_id = <<>> :: binary(),
-	  psa :: binary(),
-	  ggi :: non_neg_integer(),
-	  timer_ref :: reference(),
-	  pto :: term()
-	 }).
-
-% API
 -export([start_link/5,
-	 startup/1
-	]).
-
-% States
--export([down/2,
-	 down/3
-	]).
+	 start_link/6]).
 
 % gen_fsm callbacks
 -export([init/1,
@@ -40,85 +13,118 @@
 	 terminate/3
 	]).
 
-% API
-start_link(Hosts, GroupId, Topics, Psa, Opts) ->
-    gen_fsm:start_link(?MODULE, [Hosts, GroupId, Topics, Psa, Opts], []).
+-export([down/2,
+	 down/3,
+	 member/2,
+	 member/3,
+	 rebalancing/3,
+	 rebalancing/2
+	]).
 
-startup(Cg) ->
-    gen_fsm:sync_send_event(Cg, startup, 10000).
+-export([join/2,
+	 commit_offset/3,
+	 fetch_offset/3
+	]).
 
-% gen_fsm implementation
-init([Hosts, GroupId, Topics, Psa, Opts]) ->
+-record(state, {
+	  hosts :: dorb:hosts() | dorb:host(),
+	  group_id :: binary(),
+	  topics :: [binary()],
+	  psa :: binary(),
+	  consumer_id :: binary(),
+	  pto :: [#{}],
+	  ggi :: non_neg_integer(),
+	  session_timeout :: non_neg_integer(),
+	  socket_timeout :: non_neg_integer(),
+	  coordinator :: dorb:host(),
+	  rebalance_retries :: non_neg_integer(),
+	  tref :: reference(),
+	  commit_offset_retries :: non_neg_integer(),
+	  sup :: pid()|undefined,
+	  worker_mfa :: mfa()|undefined,
+	  rebalance_commit_timeout :: non_neg_integer()
+	 }).
+
+start_link(Sup, Hosts, GroupId, Topics, PSA, Opts) ->
+    gen_fsm:start_link(?MODULE, [Hosts, GroupId, Topics, PSA,
+				 Opts++[{sup, Sup}]], []).
+
+start_link(Hosts, GroupId, Topics, PSA, Opts) ->
+    gen_fsm:start_link(?MODULE, [Hosts, GroupId, Topics, PSA, Opts], []).
+
+join(Pid, Timeout) ->
+    gen_fsm:sync_send_event(Pid, join, Timeout).
+
+commit_offset(Pid, Topics, Timeout) ->
+    gen_fsm:sync_send_event(Pid, {commit_offset, Topics}, Timeout).
+
+fetch_offset(Pid, Topics, Timeout) ->
+    gen_fsm:sync_send_event(Pid, {fetch_offset, Topics}, Timeout).
+
+init([Hosts, GroupId, Topics, PSA, Opts]) ->
+    ConsumerId = proplists:get_value(consumer_id, Opts, <<>>),
+    SessionTimeout = proplists:get_value(session_timeout, Opts, 6000),
+    SocketTimeout = proplists:get_value(socket_timeout, Opts, 6000),
+    RebalanceRetries = proplists:get_value(rebalance_retries, Opts, 4),
+    CommitOffsetRetries = proplists:get_value(commit_offset_retries, Opts, 5),
+    Sup = proplists:get_value(sup, Opts),
+    WorkerMfa = proplists:get_value(worker_mfa, Opts),
+    RebalanceCommitTimeout = proplists:get_value(rebalance_commit_timeout,
+						 Opts, 5000),
     erlang:process_flag(trap_exit, true),
-    {ok, down, #state{hosts = Hosts,
-		      group_id = GroupId,
-		      topics = Topics,
-		      psa = Psa,
-		      consumer_id = proplists:get_value(consumer_id, Opts,
-							<<>>),
-		      session_timeout = proplists:get_value(session_timeout,
-							    Opts, 10000)}}.
+    {ok, down, #state{
+		  hosts = Hosts,
+		  group_id = GroupId,
+		  topics = Topics,
+		  psa = PSA,
+		  consumer_id = ConsumerId,
+		  session_timeout = SessionTimeout,
+		  socket_timeout = SocketTimeout,
+		  rebalance_retries = RebalanceRetries,
+		  commit_offset_retries = CommitOffsetRetries,
+		  sup = Sup,
+		  worker_mfa = WorkerMfa,
+		  rebalance_commit_timeout = RebalanceCommitTimeout
+		 }}.
 
-down(startup, From, #state{hosts=Hosts,
-			    group_id = GroupId,
-			    psa = Psa,
-			    consumer_id = ConsumerId,
-			    session_timeout = SessionTimeout,
-			    topics=Topics}=State) ->
-    GroupMetadata = dorb_msg:group_metadata(GroupId),
-    case group_metadata(GroupMetadata, Hosts, 100, 5) of
-	{ok, Pair} ->
-	    ok = dorb_connection:maybe_start_pools([{x, Pair}]), % @todo fix API
-	    JoinGroup = dorb_msg:join_group(GroupId,
-					    SessionTimeout,
-					    Topics,
-					    ConsumerId,
-					    Psa),
-	    case join_group(JoinGroup, Pair, 100, 5) of
-		{ok, {ConsumerId1, GGI, PTO}} ->
-		    Ref = timeout(SessionTimeout),
-		    {reply, joined,
-		     next_state, member, State#state{
-					   consumer_id = ConsumerId1,
-					   pto = PTO,
-					   ggi = GGI,
-					   coordinator = Pair,
-					   timer_ref = Ref}};
-		_Error ->
-		    down(startup, From, State)
-	    end;
-	_Error ->
-	    down(startup, From, State)
-    end;
-down(_, _From, State) ->
-    {reply, unsupported, down, State}.
-
-timeout(SessionTimeout) ->
-    SessionTimeout1 = random:uniform(SessionTimeout - 10),
-    erlang:send_after(SessionTimeout1, self(), liveliness).
+down(join, _From, #state{rebalance_retries=RBR} = State) ->
+    join(State, RBR, undefined).
 
 down(_Event, State) ->
     {next_state, down, State}.
 
-handle_info(liveliness, member, #state{group_id = GroupId,
-				       ggi = GGI,
-				       coordinator = Pair,
-				       session_timeout = SessionTimeout,
-				       consumer_id = ConsumerId} = State) ->
-    Heartbeat = dorb_msg:heartbeat(GroupId, GGI, ConsumerId),
-    case dorb_connection:get_socket(Pair) of
-	{ok, Socket} ->
-	    case dorb_socket:send_sync(Socket, Heartbeat, 1000) of
-		{ok, #{error_code := 0}} ->
-		    Ref = timeout(SessionTimeout),
-		    {next_state, member, State#state{timer_ref = Ref}};
-		_ ->
-		    % todo handle errors
-		    {stop, normal, member, State}
-	    end;
-	_ ->
-	    {stop, normal, member, State}
-    end;
+member({commit_offset, Pairs}, _From,
+       #state{
+	  commit_offset_retries = CommitOffsetRetries
+	 } = State) ->
+    commit_offset(Pairs, State, CommitOffsetRetries, undefined);
+member({fetch_offset, Pairs}, _From,
+       #state{
+	  commit_offset_retries = CommitOffsetRetries
+	  } = State) ->
+    fetch_offset(Pairs, State, CommitOffsetRetries, undefined).
+
+member(_Event, State) ->
+    {next_state, member, State}.
+
+rebalancing({commit_offset, Pairs}, _From,
+	    #state{
+	       commit_offset_retries = CommitOffsetRetries
+	      } = State) ->
+    case commit_offset(Pairs, State, CommitOffsetRetries, undefined) of
+	{reply, {ok, Res}, _, State1} ->
+	    {reply, {ok, Res}, rebalancing, State1};
+	O ->
+	    O
+    end.
+
+rebalancing(_, State) ->
+    {next_state, rebalancing, State}.
+
+handle_info(heartbeat, member, State) ->
+    heartbeat(State);
+handle_info(rebalance, rebalancing, State) ->
+    rebalance(State);
 handle_info(_Event, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -135,83 +141,194 @@ terminate(_Reason, _StateName, _State) ->
     ok.
 
 % Internal
-join_group(_, _, _, 0) ->
-    {error, unable_to_join_group};
-join_group(JoinGroup, {Host, Port}=Pair, Timeout, Retries) ->
-    % Since it is a consumer group, it gets a persistant connection to the
-    % coordinator.
-    Pool = {binary_to_list(Host), Port},
-    case dorb_connection:get_socket(Pool) of
-	{ok, Socket} ->
-	    join_group_(Pool, Socket, JoinGroup, Timeout, Retries);
-	_Error ->
-	    timer:sleep(Timeout),
-	    join_group(JoinGroup, Pair, Timeout, Retries - 1)
+heartbeat_timer(SessionTimeout) ->
+    erlang:send_after(SessionTimeout - random:uniform(SessionTimeout),
+		      self(), heartbeat).
+
+discover_coordinator(_, 0, LastError) ->
+    LastError;
+discover_coordinator(#state{
+			hosts = Hosts,
+			group_id = GroupId,
+			socket_timeout = SocketTimeout
+		       } = State, Retries, _LastError) ->
+    {ok, Socket} = dorb_connection:get_socket(Hosts),
+    case dorb_consumer_group:metadata(Socket, GroupId, SocketTimeout) of
+	{ok, Coordinator} ->
+	    dorb_connection:return_socket(Socket),
+	    {ok, Coordinator};
+	Error ->
+	    dorb_connection:return_socket(Socket),
+	    discover_coordinator(State, Retries-1, Error)
     end.
 
-join_group_(Pool, Socket, _, _, 0) ->
-    dorb_connection:return_socket(Pool, Socket),
-    {error, unable_to_join_group};
-join_group_(Pool, Socket, JoinGroup, Timeout, Retries) ->
-    case dorb_socket:send_sync(Socket, JoinGroup, 500) of
-	{ok, #{error_code := 0,
-	       consumer_id := ConsumerId,
-	       group_generation_id := GGI,
-	       partitions_to_own := PTO}} ->
-	    dorb_connection:return_socket(Pool, Socket),
-	    {ok, {ConsumerId, GGI, PTO}};
-	_Error ->
-	    timer:sleep(Timeout),
-	    join_group_(Pool, Socket, JoinGroup, Timeout, Retries - 1)
-    end.
-
-group_metadata(_, _, _, 0) ->
-    {error, unable_to_get_metadata};
-group_metadata(GroupRequest, Hosts, Timeout, Retries) ->
-    case dorb_connection:get_socket(Hosts) of
-	{Pool, {ok, Socket}} ->
-	    case dorb_socket:send_sync(Socket, GroupRequest, 1000) of
-		{ok, #{error_code := 0,
-		       coordinator_host := Host,
-		       coordinator_port := Port}} ->
-		    dorb_connection:return_socket(Pool, Socket),
-		    {ok, {Host, Port}};
-		_ ->
-		    dorb_connection:return_socket(Pool, Socket),
-		    timer:sleep(Timeout),
-		    group_metadata(GroupRequest, Hosts, Timeout, Retries - 1)
+join(State, 0, LastError) ->
+    % Unable to join the consumer group and gave up retrying. There is no way to
+    % recover from this and we give up.
+    {stop, normal, LastError, State};
+join(#state{
+	group_id = GroupId,
+	topics = Topics,
+	psa = PSA,
+	consumer_id = ConsumerId,
+	socket_timeout = SocketTimeout,
+	session_timeout = SessionTimeout,
+	sup=Sup,
+	worker_mfa=WorkerMfa
+       } = State, RBR, _LastError) ->
+    case discover_coordinator(State, RBR, undefined) of
+	{ok, Coordinator} ->
+	    % Get a coordinator socket
+	    {ok, Socket1} = dorb_connection:get_socket(Coordinator),
+	    case dorb_consumer_group:join(Socket1, GroupId, SessionTimeout,
+					  Topics, ConsumerId, PSA,
+					  SocketTimeout) of
+		{ok, #{consumer_id := ConsumerId1,
+		       ggi := GGI,
+		       pto := PTO}} ->
+		    % Joined Successfully. Return the socket
+		    dorb_connection:return_socket(Socket1),
+		    % Set a timer to maintain membership via heartbeats
+		    Tref = heartbeat_timer(SessionTimeout),
+		    maybe_start_workers(Sup, WorkerMfa, PTO),
+		    {reply, {ok, PTO}, member, State#state{
+						 consumer_id = ConsumerId1,
+						 pto = PTO,
+						 ggi = GGI,
+						 coordinator = Coordinator,
+						 tref = Tref}};
+		{kafka_error, inconsistent_partition_assignment_strategy=R} ->
+		    {stop, normal, R, State};
+		{kafka_error, unknown_partition_assignment_strategy=R} ->
+		    {stop, normal, R, State};
+		{kafka_error, unknown_consumer_id=R} ->
+		    {stop, normal, R, State};
+		{kafka_error, invalid_timeout=R} ->
+		    {stop, normal, R, State};
+		{kafka_error, _Error} = KE ->
+		    % Hit a Kafka error.
+		    dorb_connection:return_socket(Socket1),
+		    join(State, RBR-1, KE);
+		{error, _Error} = E ->
+		    % Hit a socket error (most probably a timeout)
+		    dorb_connection:return_socket(Socket1),
+		    join(State, RBR-1, E)
 	    end;
-	_ ->
-	    timer:sleep(Timeout),
-	    group_metadata(GroupRequest, Hosts, Timeout, Retries - 1)
+	{error, _Error} = E ->
+	    % Hit a socket error (most probably a timeout)
+	    join(State, 0, E) % The discover function loops
     end.
 
--include_lib("eunit/include/eunit.hrl").
--ifdef(TEST).
+commit_offset(_, State, 0, LastError) ->
+    {reply, LastError, down, State};
+commit_offset(Pairs, #state{
+			group_id = GroupId,
+			coordinator = Coordinator,
+			socket_timeout = SocketTimeout
+		       } = State, COR, _LastError) ->
+    {ok, Socket} = dorb_connection:get_socket(Coordinator),
+    case dorb_consumer_group:commit_offset(Socket, GroupId, Pairs,
+					   SocketTimeout) of
+	{ok, Res} ->
+	    % Got a commit offset from the cluster
+	    dorb_connection:return_socket(Socket),
+	    {reply, {ok, Res}, member, State};
+	{error, _Error} = E ->
+	    % Hit a socket error (most probably a timeout)
+	    dorb_connection:return_socket(Socket),
+	    commit_offset(Pairs, Socket, COR-1, E)
+    end.
 
-start_process_test() ->
-    {ok, Pid} = start_link([{"localhost, 9092"}],
-			   <<"test">>,
-			   [<<"test">>],
-			   <<"range">>, []),
-    ?assertEqual(true, erlang:is_process_alive(Pid)).
+fetch_offset(Pairs, #state{
+		       group_id = GroupId,
+		       coordinator = Coordinator,
+		       socket_timeout = SocketTimeout
+		      } = State, FOR, _LastError) ->
+    {ok, Socket} = dorb_connection:get_socket(Coordinator),
+    case dorb_consumer_group:fetch_offset(Socket, GroupId, Pairs,
+					  SocketTimeout) of
+	{ok, Res} ->
+	    dorb_connection:return_socket(Socket),
+	    {reply, {ok, Res}, member, State};
+	{error, _Error} = E ->
+	% Hit a socket error (most probably a timeout)
+	    dorb_connection:return_socket(Socket),
+	    fetch_offset(Pairs, State, FOR-1, E)
+    end.
 
-join_group_test() ->
-    application:ensure_all_started(dorb),
-    dorb:start([{"localhost", 9092}]),
-    {ok, Pid} = start_link([{"localhost", 9092}],
-			   <<"i">>,
-			   [<<"test">>],
-			   <<"range">>, []),
-    unlink(Pid),
-    ?assertEqual(true, erlang:is_process_alive(Pid)),
-    startup(Pid).
-    
--endif.
+heartbeat(#state{
+	     group_id = GroupId,
+	     ggi = GGI,
+	     consumer_id = ConsumerId,
+	     socket_timeout = SocketTimeout,
+	     coordinator = Coordinator,
+	     session_timeout = SessionTimeout,
+	     rebalance_retries = RBR
+	    } = State) ->
+    {ok, Socket} = dorb_connection:get_socket(Coordinator),
+    case dorb_consumer_group:heartbeat(Socket, GroupId, GGI, ConsumerId,
+				       SocketTimeout) of
+	{ok, online} ->
+	    % Consumer group is still online. Set a new counter and continue
+	    TRef = heartbeat_timer(SessionTimeout),
+	    dorb_connection:return_socket(Socket),
+	    {next_state, member, State#state{
+				   tref = TRef
+				  }};
+	{kafka_error, unknown_consumer_id=R} ->
+	    % This consumer is unknown by the Kafka cluster. Shut down. Arguably
+	    % the consumer group could join with the empty name but this
+	    % indicates a bad configuration and the safest thing to do is to
+	    % shut dow
+	    dorb_connection:return_socket(Socket),
+	    {stop, normal, R, State};
+	{kafka_error, illegal_generation}=R ->
+	    dorb_connection:return_socket(Socket),
+	    rejoin(State, R);
+	{error, _Error} ->
+	    dorb_connection:return_socket(Socket),
+	    case discover_coordinator(State, RBR, undefined) of
+		{ok, Coordinator1} ->
+		    % Found a new coordinator. Heartbeat it and maybe trigger a
+		    % new generation
+		    heartbeat(State#state{
+				coordinator = Coordinator1});
+		{error, _Error} = E ->
+		    % Unable to find a new coordinator. Shut down.
+		    {stop, E, State}
+	    end
+    end.
 
-	    %% TopicsPartitions =
-	    %% 	[{TopicName,
-	    %% 	  [Partition || Partition
-	    %% 			    <- #{partition := Partition} <- Partitions]}
-	    %% 	 || #{topic_name := TopicName, partitions := Partitions}
-	    %% 	    <- PTO],
+rejoin(#state{sup=undefined}=State, LastErr) ->
+    join(State, LastErr);
+rejoin(#state{sup=Sup,
+	      rebalance_commit_timeout=RCT}=State, _LastErr) ->
+    % The kafka cluster has rebalanced. All consumers should stop
+    % consumption, commit offsets and the consumer group should rejoin.
+    dorb_consumer_sup:notify_partitions(Sup, commit_offsets),
+    erlang:send_after(RCT, self(), rebalance),
+    {next_state, rebalancing, State}.
+
+rebalance(#state{sup=undefined}=State) ->
+    join(State, undefined);
+rebalance(#state{sup=Sup}=State) ->
+    dorb_consumer_sup:stop_partitions(Sup),
+    join(State, undefined).
+
+maybe_start_workers(undefined, _, _) ->
+    ok;
+maybe_start_workers(_, undefined, _) ->
+    ok;
+maybe_start_workers(_, _, []) ->
+    ok;
+maybe_start_workers(Sup, MFA, [{Topic, Partitions}|Rest]) ->
+    start_worker(Sup, MFA, Topic, Partitions),
+    maybe_start_workers(Sup, MFA, Rest).
+
+start_worker(_, _, _, []) ->
+    ok;
+start_worker(Sup, MFA, Topic, [Partition|Partitions]) ->
+    dorb_consumer_sup:start_partition(Sup, Topic, Partition,
+				      self(), MFA),
+    start_worker(Sup, MFA, Topic, Partitions).
+
