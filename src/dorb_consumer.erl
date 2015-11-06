@@ -157,6 +157,10 @@ discover_coordinator(#state{
 	{ok, Coordinator} ->
 	    dorb_connection:return_socket(Socket),
 	    {ok, Coordinator};
+	{kafka_error, _E} = Error ->
+	    dorb_connection:return_socket(Socket),
+	    timer:sleep(500),
+	    discover_coordinator(State, Retries-1, Error);
 	Error ->
 	    dorb_connection:return_socket(Socket),
 	    discover_coordinator(State, Retries-1, Error)
@@ -178,7 +182,7 @@ join(#state{
        } = State, RBR, _LastError) ->
     case discover_coordinator(State, RBR, undefined) of
 	{ok, Coordinator} ->
-	    % Get a coordinator socket
+	   % Get a coordinator socket
 	    {ok, Socket1} = dorb_connection:get_socket(Coordinator),
 	    case dorb_consumer_group:join(Socket1, GroupId, SessionTimeout,
 					  Topics, ConsumerId, PSA,
@@ -206,8 +210,9 @@ join(#state{
 		{kafka_error, invalid_timeout=R} ->
 		    {stop, normal, R, State};
 		{kafka_error, _Error} = KE ->
-		    % Hit a Kafka error.
+		    % Hit a Kafka error. Back off, and retry
 		    dorb_connection:return_socket(Socket1),
+		    timer:sleep(500),
 		    join(State, RBR-1, KE);
 		{error, _Error} = E ->
 		    % Hit a socket error (most probably a timeout)
@@ -279,9 +284,10 @@ heartbeat(#state{
 	    % This consumer is unknown by the Kafka cluster. Shut down. Arguably
 	    % the consumer group could join with the empty name but this
 	    % indicates a bad configuration and the safest thing to do is to
-	    % shut dow
+	    % shut down
+	    error_logger:info_msg("Invalid Consumer Id for Consumer Group"),
 	    dorb_connection:return_socket(Socket),
-	    {stop, normal, R, State};
+	    {stop, normal, State};
 	{kafka_error, illegal_generation}=R ->
 	    dorb_connection:return_socket(Socket),
 	    rejoin(State, R);
