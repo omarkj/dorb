@@ -67,7 +67,6 @@ fetch(MaxWaitTime, MinBytes, Topics) ->
 fetch_topics([], Res) ->
     Res;
 fetch_topics([{TopicName, FetchDetails}|Rest], Res) ->
-    % FetchDetails1 = fetch_details(FetchDetails, []),
     fetch_topics(Rest,
 		 [[{string, TopicName},
 		   {array, [[{int32, Partition},
@@ -126,14 +125,13 @@ heartbeat(GroupId, GroupGenerationId, ConsumerId) ->
 	  {int32, GroupGenerationId},
 	  {string, ConsumerId}]}.
 
-offset_commit(GroupId, GroupGenerationId, ConsumerId, RetentionTime,
+offset_commit(GroupId,
 	      Topics) ->
     {8, [{string, GroupId},
-	 {int32, GroupGenerationId},
-	 {string, ConsumerId},
-	 {int64, RetentionTime},
 	 {array, offset_commit_topics(Topics, [])}]}.
 
+%% Offsets commits, I'm unsure which ones are active. This is V0, but I tried
+% V1 and V2. @todo revisit.
 offset_commit_topics([], Acc) ->
     Acc;
 offset_commit_topics([{TopicName, CommitDetails}|Rest], Acc) ->
@@ -141,8 +139,10 @@ offset_commit_topics([{TopicName, CommitDetails}|Rest], Acc) ->
 			 [[{string, TopicName},
 			   {array, [[{int32, Partition},
 				     {int64, Offset},
+				     % {int64, Timestamp},
 				     {string, Metadata}]
-				    || {Partition, Offset, Metadata}
+				    || {Partition, Offset, _Timestamp,
+					Metadata}
 					   <- CommitDetails]}]|Acc]).
 
 fetch_offset(GroupId, Topics) ->

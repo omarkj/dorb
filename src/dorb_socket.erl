@@ -36,6 +36,7 @@
 
 % API
 -export([start_link/1,
+	 start/1,
 	 stop/1,
 	 send/2,
 	 send_sync/3]).
@@ -55,6 +56,13 @@
       Pid :: pid().
 start_link({_Host, _Port}=Args) ->
     gen_server:start_link(?MODULE, [Args], []).
+
+-spec start({Host, Port}) -> {ok, Pid} when
+      Host :: inet:ip_address()|inet:hostname(),
+      Port :: inet:port_number(),
+      Pid :: pid().
+start({_,_}=Args) ->
+    gen_server:start(?MODULE, [Args], []).
 
 -spec stop(Connection) -> ok when
       Connection :: pid().
@@ -163,7 +171,10 @@ next_corr_id(CorrId) ->
 -spec maybe_connect(undefined|port(), inet:ip_address()|inet:hostname(),
 		    Port :: inet:port_number()) -> {ok, port()}|{error, term()}.
 maybe_connect(undefined, Host, Port) ->
-    gen_tcp:connect(Host, Port, [{active, once}, {packet, raw}, binary], 5000);
+    gen_tcp:connect(Host, Port, [{active, once}, {packet, raw}, binary,
+				 {keepalive, true},
+				 {packet, raw},
+				 {nodelay, true}], 5000);
 maybe_connect(Socket, _, _) ->
     {ok, Socket}.
 

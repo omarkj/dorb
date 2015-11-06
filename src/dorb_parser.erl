@@ -101,8 +101,8 @@ parse(8, OffsetCommitResponse) ->
 	     [{topic_name, string},
 	      {partitions,
 	       [{partition, int32},
-		{error_code, int16},
-		{unknown, int64} % No idea what this is, but it's there...
+		{error_code, int16}
+		% {unknown, int64} % No idea what this is, but it's there...
 	       ]}
 	     ]}],
     {Resp, <<>>} = parse(OffsetCommitResponse, Spec, #{}),
@@ -353,12 +353,13 @@ parse_metadata_test() ->
 			      topic_name => <<"test">>}]}}, parse(3, Metadata)).
 
 parse_offset_commit_test() ->
-    OffsetCommit = <<0,0,0,1,0,4,116,101,115,116,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,
-		     0,0,49>>,
+    OffsetCommit = <<0,0,0,1,0,4,116,101,115,116,0,0,0,1,0,0,0,0,0,0>>,
+		     %0,0,0,0,0,0,0,49>>,
     ?assertEqual({ok, #{topics => [#{partitions =>
 					[#{error_code => 0,
-					   partition => 0,
-					   unknown => 49}
+					   partition => 0
+					   % unknown => 49
+					  }
 					],
 				    topic_name => <<"test">>}]}},
 		parse(8, OffsetCommit)).

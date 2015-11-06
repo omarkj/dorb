@@ -78,4 +78,24 @@ error(15) ->
 error(16) ->
     % The broker returns this error code if it receives an offset fetch or
     % commit request for a consumer group that it is not a coordinator for.
-    not_coordinator_for_consumer.
+    not_coordinator_for_consumer;
+error(17) ->
+    invalid_topic_exception;
+error(18) ->
+    record_list_too_large;
+error(19) ->
+    not_enough_replicas;
+error(20) ->
+    not_enough_replicast_after_append;
+error(21) ->
+    invalid_required_acks;
+error(22) ->
+    illegal_generation;
+error(23) ->
+    inconsistent_partition_assignment_strategy;
+error(24) ->
+    unknown_partition_assignment_strategy;
+error(25) ->
+    unknown_consumer_id;
+error(26) ->
+    invalid_timeout.

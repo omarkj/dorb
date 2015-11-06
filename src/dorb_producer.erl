@@ -55,48 +55,10 @@ init([Hosts, Opts]) ->
 		timeout = proplists:get_value(timeout, Opts, 100)
 	       }}.
 
-handle_call({send, Topic, Messages}=Send, From,
-	    #state{hosts=Hosts,
-		   topics_metadata=TopicsMetadata,
-		   partitioner=Partitioner,
-		   required_acks=RequiredAcks,
-		   node_ids = NodeIds,
-		   timeout=Timeout}=State) ->
-    MetadataForTopic = proplists:get_value(Topic, TopicsMetadata),
-    case prepare_send(Topic, lists:reverse(Messages), Partitioner, RequiredAcks,
-		      Timeout, MetadataForTopic) of
-	{error, refresh_metadata} ->
-	    case dorb_connection:get_socket(Hosts) of
-		{Pool, {ok, Socket}} ->
-		    {NodeIds1, MetadataForTopic1} =
-			metadata_for_topics(Socket, [Topic]),
-		    dorb_connection:return_socket(Pool, Socket),
-		    ok = dorb_connection:maybe_start_pools(NodeIds1),
-		    % question: maybe remove a tuple with the same name if exists in
-		    % the topics metadata list?
-		    TopicsMetadata1 = TopicsMetadata ++ MetadataForTopic1,
-		    handle_call(Send, From,
-				State#state{topics_metadata = TopicsMetadata1,
-					    node_ids = NodeIds1});
-		{error, timeout} ->
-		    % Unable to fetch metadata. Shutdown
-		    {stop, normal, State}
-	    end;
-	EncodedMessages ->
-	    Reply = send_(EncodedMessages, NodeIds, []),
-	    {reply, Reply, State}
-    end;
+handle_call({send, Topic, Messages}, _From, State) ->
+    send(Topic, Messages, State);
 handle_call(_Msg, _From, State) ->
     {noreply, State}.
-
-send_([], _, Refs) ->
-    Refs;
-send_([{LeaderId, EncodedMessage}|Rest], Leaders, Acc) ->
-    Leader = proplists:get_value(LeaderId, Leaders),
-    {ok, Socket} = dorb_connection:get_socket(Leader),
-    {ok, Resp} = dorb_socket:send_sync(Socket, EncodedMessage, 1000),
-    dorb_connection:return_socket(Leader, Socket),
-    send_(Rest, Leaders, [Resp|Acc]).
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -111,6 +73,43 @@ terminate(_Reason, _State) ->
     ok.
 
 %% Internal
+send(Topic, Messages, #state{
+			 hosts=Hosts,
+			 topics_metadata=TopicsMetadata,
+			 partitioner=Partitioner,
+			 required_acks=RequiredAcks,
+			 node_ids = NodeIds,
+			 timeout=Timeout
+			}=State) ->
+    MetadataForTopic = proplists:get_value(Topic, TopicsMetadata),
+    case prepare_send(Topic, lists:reverse(Messages), Partitioner,
+		      RequiredAcks, Timeout, MetadataForTopic) of
+	{error, refresh_metadata} ->
+	    {ok, Socket} = dorb_connection:get_socket(Hosts),
+	    {NodeIds1, MetadataForTopic1} =
+		metadata_for_topics(Socket, [Topic]),
+	    dorb_connection:return_socket(Socket),
+            % question: maybe remove a tuple with the same name if exists in
+	    % the topics metadata list?
+	    TopicsMetadata1 = TopicsMetadata ++ MetadataForTopic1,
+	    send(Topic, Messages, State#state{
+				    topics_metadata = TopicsMetadata1,
+				    node_ids = NodeIds1
+				   });
+	EncodedMessages ->
+	    Reply = send_(EncodedMessages, NodeIds, []),
+	    {reply, Reply, State}
+    end.
+
+send_([], _, Refs) ->
+    Refs;
+send_([{LeaderId, EncodedMessage}|Rest], Leaders, Acc) ->
+    Leader = proplists:get_value(LeaderId, Leaders),
+    {ok, Socket} = dorb_connection:get_socket(Leader),
+    {ok, Resp} = dorb_socket:send_sync(Socket, EncodedMessage, 1000),
+    dorb_connection:return_socket(Socket),
+    send_(Rest, Leaders, [Resp|Acc]).
+
 default_partitioner(_Topic, _Key, Partitions) ->
     random:uniform(Partitions) - 1.
 
