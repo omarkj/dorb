@@ -141,9 +141,9 @@ terminate(_Reason, _StateName, _State) ->
     ok.
 
 % Internal
-heartbeat_timer(SessionTimeout) ->
-    erlang:send_after(SessionTimeout - random:uniform(SessionTimeout),
-		      self(), heartbeat).
+heartbeat_timer(_SessionTimeout) ->
+    erlang:send_after(1000, self(), heartbeat).
+
 
 discover_coordinator(_, 0, LastError) ->
     LastError;
@@ -280,7 +280,7 @@ heartbeat(#state{
 	    {next_state, member, State#state{
 				   tref = TRef
 				  }};
-	{kafka_error, unknown_consumer_id=R} ->
+	{kafka_error, unknown_consumer_id} ->
 	    % This consumer is unknown by the Kafka cluster. Shut down. Arguably
 	    % the consumer group could join with the empty name but this
 	    % indicates a bad configuration and the safest thing to do is to
