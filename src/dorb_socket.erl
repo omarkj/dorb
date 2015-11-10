@@ -49,6 +49,8 @@
 	 terminate/2,
 	 code_change/3]).
 
+-include("dorb.hrl").
+
 % API implementation
 -spec start_link({Host, Port}) -> {ok, Pid} when
       Host :: inet:ip_address()|inet:hostname(),
@@ -66,25 +68,25 @@ start({_,_}=Args) ->
 
 -spec stop(Connection) -> ok when
       Connection :: pid().
-stop(Connection) ->
-    gen_server:cast(Connection, stop).
+stop(Pid) ->
+    gen_server:cast(Pid, stop).
 
 -spec send(Connection, Msg) ->
 		  {ok, Ref} when
-      Connection :: pid(),
+      Connection :: dorb_connection:socket(),
       Msg :: dorb_msg:msg(),
       Ref :: reference().
-send(Connection, Msg) ->
-    gen_server:call(Connection, {send, self(), Msg}).
+send(#socket{pid = Pid}, Msg) ->
+    gen_server:call(Pid, {send, self(), Msg}).
 
 -spec send_sync(Connection, Msg, Timeout) -> {ok, Message}|
 					     {error, timeout} when
-      Connection :: pid(),
+      Connection :: dorb_connection:socket(),
       Msg :: dorb_msg:msg(),
       Timeout :: integer(),
       Message :: dorb_parser:reply().
-send_sync(Connection, Msg, Timeout) ->
-    {ok, Ref} = send(Connection, Msg),
+send_sync(Socket, Msg, Timeout) ->
+    {ok, Ref} = send(Socket, Msg),
     receive
 	{dorb_msg, Ref, Message} ->
 	    {ok, Message}
