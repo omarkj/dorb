@@ -62,12 +62,32 @@
 get([Host|_]) ->
     ?MODULE:get(Host);
 get(Host) ->
-    {ok, Pid} = start(Host),
-    {ok, #socket{pid = Pid}}.
+    % Check if the pool exists (create PR for episcina, see if they are willing
+    % to merge it
+    try gproc:lookup_value({n, l, {epna_pool, Host}}) of
+	_ ->
+	    {ok, Pid} = episcina:get_connection(Host, 5000),
+	    {ok, #socket{pid = Pid,
+			 pool_name = Host}}
+    catch
+	_:_ ->
+	    % No pool found
+	    {ok, PoolSize} = application:get_env(dorb, pool_size),
+	    {ok, Timeout} = application:get_env(dorb, timeout),
+	    episcina:start_pool(Host, PoolSize, Timeout,
+				fun() ->
+					?MODULE:start_link(Host)
+				end,
+				fun(Pid) ->
+					?MODULE:stop(Pid)
+				end),
+	    ?MODULE:get(Host)
+    end.
 
 -spec return(socket()) -> ok.
-return(#socket{pid = Pid}) ->
-    dorb_socket:stop(Pid).
+return(#socket{pid = Pid,
+	       pool_name = PoolName}) ->
+    episcina:return_connection(PoolName, Pid).
 
 -spec return_bad(socket()) -> ok.
 return_bad(#socket{pid = Pid}) ->

@@ -1,3 +1,4 @@
 -record(socket, {
-	  pid :: pid()
+	  pid :: pid(),
+	  pool_name :: term()
 	 }).
