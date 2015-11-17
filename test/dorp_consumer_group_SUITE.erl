@@ -22,21 +22,23 @@ all() ->
     end.
 
 init_per_suite(Config) ->
-    {ok, Socket} = dorb_socket:start({"localhost", 9092}),
-    [{socket, Socket},
+    {ok, Started} = application:ensure_all_started(dorb),
+    [{started, Started},
      {group_name, base64:encode(crypto:strong_rand_bytes(10))}|Config].
 
 end_per_suite(Config) ->
-    dorb_socket:stop(?config(socket, Config)),
+    [application:stop(App) || App <- ?config(started, Config)],
     Config.
 
 flow(Config) ->
-    Socket = ?config(socket, Config),
+    {ok, Socket} = dorb_socket:get({"localhost", 9092}),
     GroupName = ?config(group_name, Config),
-    {_, _} = dorb_consumer_group:metadata(Socket, GroupName, 1000),
+    {ok, Coordinator} = dorb_consumer_group:metadata(Socket, GroupName, 1000),
+    dorb_socket:return(Socket),
+    {ok, Socket1} = dorb_socket:get(Coordinator),
     {Socket1, {ok, #{consumer_id := CID,
 		     ggi := GGI}}}
-	= join_group(Socket, GroupName, 5, undefined),
+	= join_group(Socket1, GroupName, 5, undefined),
     {ok,[
 	 #{partitions :=
 	       [#{error := unknown_topic_or_partition,
@@ -64,7 +66,7 @@ flow(Config) ->
 					 2000),
     {ok, online} = dorb_consumer_group:heartbeat(Socket1, GroupName, GGI, CID,
 						 2000),
-    dorb_socket:stop(Socket),
+    dorb_socket:return(Socket1),
     Config.
 
 %% Internal
@@ -80,7 +82,7 @@ join_group(Socket, GroupName, Retries, _Error) ->
 	{kafka_error, KafkaError} ->
 	    join_group(Socket, GroupName, Retries-1, KafkaError);
 	{error, _} = Err ->
-	    dorb_socket:stop(Socket),
-	    {ok, Socket1} = dorb_socket:start({"localhost", 9092}),
+	    dorb_socket:return(Socket),
+	    {ok, Socket1} = dorb_socket:get({"localhost", 9092}),
 	    join_group(Socket1, GroupName, Retries-1, Err)
     end.

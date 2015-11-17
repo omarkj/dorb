@@ -1,16 +1,16 @@
 {application, 'dorb',
- [{description, "An OTP library"},
-  {vsn, "0.1.0"},
+ [{description, "Kafka  0.8.3 client"},
+  {vsn, "0.2.0"},
   {registered, []},
   {applications,
    [kernel,
     stdlib,
     episcina
    ]},
-  {env,[]},
+  {env,[{pool_size, 5},
+	{timeout, 5000}]},
   {modules, []},
-
-  {contributors, []},
-  {licenses, []},
-  {links, []}
+  {contributors, ["Omar Kjartan Yasin <omarkj@gmail.com>"]},
+  {licenses, ["BSD"]},
+  {links, ["https://www.github.com/omarkj/dorb"]}
  ]}.

@@ -85,10 +85,10 @@ send(Topic, Messages, #state{
     case prepare_send(Topic, lists:reverse(Messages), Partitioner,
 		      RequiredAcks, Timeout, MetadataForTopic) of
 	{error, refresh_metadata} ->
-	    {ok, Socket} = dorb_connection:get_socket(Hosts),
+	    {ok, Socket} = dorb_socket:get(Hosts),
 	    {NodeIds1, MetadataForTopic1} =
 		metadata_for_topics(Socket, [Topic]),
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
             % question: maybe remove a tuple with the same name if exists in
 	    % the topics metadata list?
 	    TopicsMetadata1 = TopicsMetadata ++ MetadataForTopic1,
@@ -105,9 +105,9 @@ send_([], _, Refs) ->
     Refs;
 send_([{LeaderId, EncodedMessage}|Rest], Leaders, Acc) ->
     Leader = proplists:get_value(LeaderId, Leaders),
-    {ok, Socket} = dorb_connection:get_socket(Leader),
+    {ok, Socket} = dorb_socket:get(Leader),
     {ok, Resp} = dorb_socket:send_sync(Socket, EncodedMessage, 1000),
-    dorb_connection:return_socket(Socket),
+    dorb_socket:return(Socket),
     send_(Rest, Leaders, [Resp|Acc]).
 
 default_partitioner(_Topic, _Key, Partitions) ->
