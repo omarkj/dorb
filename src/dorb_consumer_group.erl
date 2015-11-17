@@ -10,7 +10,7 @@
 		      {ok, term()}|
 		      {kafka_error, dorb_error:msg()}|
 		      {error, term()} when
-      Connection :: dorb_connection:socket(),
+      Connection :: dorb_socket:socket(),
       GroupId :: binary(),
       Timeout :: non_neg_integer().
 metadata(Socket, GroupId, Timeout) ->
@@ -23,7 +23,7 @@ metadata(Socket, GroupId, Timeout) ->
 		  {ok, term()}|
 		  {kafka_error, dorb_error:msg()}|
 		  {error, term()} when
-      Connection :: dorb_connection:socket(),
+      Connection :: dorb_socket:socket(),
       GroupId :: binary(),
       SessionTimeout :: non_neg_integer(),
       Topics :: [binary()],
@@ -40,7 +40,7 @@ join(Socket, GroupId, SessionTimeout, Topics, ConsumerId, PSA, Timeout) ->
 			  {ok, term()}|
 			  {kafka_error, dorb_error:msg()}|
 			  {error, term()} when
-      Connection :: dorb_connection:socket(),
+      Connection :: dorb_socket:socket(),
       GroupId :: binary(),
       TopicsPartitions :: [{binary(), [non_neg_integer()]}],
       Timeout :: non_neg_integer().
@@ -53,7 +53,7 @@ fetch_offset(Socket, GroupId, TopicsPartitions, Timeout) ->
 			   {ok, term()}|
 			   {kafka_error, dorb_error:msg()}|
 			   {error, term()} when
-      Connection :: dorb_connection:socket(),
+      Connection :: dorb_socket:socket(),
       GroupId :: binary(),
       Topics :: [{binary(), [{non_neg_integer(), non_neg_integer(),
 			      non_neg_integer(), binary()}]}],
@@ -67,7 +67,7 @@ commit_offset(Socket, GroupId, Topics, Timeout) ->
 		       {ok, online}|
 		       {kafka_error, dorb_error:msg()}|
 		       {error, term()} when
-      Connection :: dorb_connection:socket(),
+      Connection :: dorb_socket:socket(),
       GroupId :: binary(),
       GGI :: non_neg_integer(),
       ConsumerId :: binary(),

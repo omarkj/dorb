@@ -22,12 +22,12 @@ all() ->
     end.
 
 init_per_suite(Config) ->
-    {ok, Socket} = dorb_socket:start({"localhost", 9092}),
+    {ok, Socket} = dorb_socket:get({"localhost", 9092}),
     [{socket, Socket},
      {group_name, base64:encode(crypto:strong_rand_bytes(10))}|Config].
 
 end_per_suite(Config) ->
-    dorb_socket:stop(?config(socket, Config)),
+    dorb_socket:return(?config(socket, Config)),
     Config.
 
 flow(Config) ->
@@ -64,7 +64,7 @@ flow(Config) ->
 					 2000),
     {ok, online} = dorb_consumer_group:heartbeat(Socket1, GroupName, GGI, CID,
 						 2000),
-    dorb_socket:stop(Socket),
+    dorb_socket:return(Socket),
     Config.
 
 %% Internal
@@ -80,7 +80,7 @@ join_group(Socket, GroupName, Retries, _Error) ->
 	{kafka_error, KafkaError} ->
 	    join_group(Socket, GroupName, Retries-1, KafkaError);
 	{error, _} = Err ->
-	    dorb_socket:stop(Socket),
-	    {ok, Socket1} = dorb_socket:start({"localhost", 9092}),
+	    dorb_socket:return(Socket),
+	    {ok, Socket1} = dorb_socket:get({"localhost", 9092}),
 	    join_group(Socket1, GroupName, Retries-1, Err)
     end.

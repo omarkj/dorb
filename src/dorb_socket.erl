@@ -39,7 +39,10 @@
 	 start/1,
 	 stop/1,
 	 send/2,
-	 send_sync/3]).
+	 send_sync/3,
+	 get/1,
+	 return/1,
+	 return_bad/1]).
 
 % gen_server callbacks
 -export([init/1,
@@ -50,6 +53,25 @@
 	 code_change/3]).
 
 -include("dorb.hrl").
+
+-type socket() :: #socket{}.
+-export_type([socket/0]).
+
+-spec get(dorb:host()|[dorb:host()]) ->
+		 {ok, socket()}.
+get([Host|_]) ->
+    ?MODULE:get(Host);
+get(Host) ->
+    {ok, Pid} = start(Host),
+    {ok, #socket{pid = Pid}}.
+
+-spec return(socket()) -> ok.
+return(#socket{pid = Pid}) ->
+    dorb_socket:stop(Pid).
+
+-spec return_bad(socket()) -> ok.
+return_bad(#socket{pid = Pid}) ->
+    dorb_socket:stop(Pid).
 
 % API implementation
 -spec start_link({Host, Port}) -> {ok, Pid} when
@@ -73,7 +95,7 @@ stop(Pid) ->
 
 -spec send(Connection, Msg) ->
 		  {ok, Ref} when
-      Connection :: dorb_connection:socket(),
+      Connection :: socket(),
       Msg :: dorb_msg:msg(),
       Ref :: reference().
 send(#socket{pid = Pid}, Msg) ->
@@ -81,7 +103,7 @@ send(#socket{pid = Pid}, Msg) ->
 
 -spec send_sync(Connection, Msg, Timeout) -> {ok, Message}|
 					     {error, timeout} when
-      Connection :: dorb_connection:socket(),
+      Connection :: socket(),
       Msg :: dorb_msg:msg(),
       Timeout :: integer(),
       Message :: dorb_parser:reply().

@@ -1,0 +1,3 @@
+-record(socket, {
+	  pid :: pid()
+	 }).

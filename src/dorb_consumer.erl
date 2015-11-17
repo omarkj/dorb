@@ -152,17 +152,17 @@ discover_coordinator(#state{
 			group_id = GroupId,
 			socket_timeout = SocketTimeout
 		       } = State, Retries, _LastError) ->
-    {ok, Socket} = dorb_connection:get_socket(Hosts),
+    {ok, Socket} = dorb_socket:get(Hosts),
     case dorb_consumer_group:metadata(Socket, GroupId, SocketTimeout) of
 	{ok, Coordinator} ->
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    {ok, Coordinator};
 	{kafka_error, _E} = Error ->
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    timer:sleep(500),
 	    discover_coordinator(State, Retries-1, Error);
 	Error ->
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return_bad(Socket),
 	    discover_coordinator(State, Retries-1, Error)
     end.
 
@@ -183,7 +183,7 @@ join(#state{
     case discover_coordinator(State, RBR, undefined) of
 	{ok, Coordinator} ->
 	   % Get a coordinator socket
-	    {ok, Socket1} = dorb_connection:get_socket(Coordinator),
+	    {ok, Socket1} = dorb_socket:get(Coordinator),
 	    case dorb_consumer_group:join(Socket1, GroupId, SessionTimeout,
 					  Topics, ConsumerId, PSA,
 					  SocketTimeout) of
@@ -191,7 +191,7 @@ join(#state{
 		       ggi := GGI,
 		       pto := PTO}} ->
 		    % Joined Successfully. Return the socket
-		    dorb_connection:return_socket(Socket1),
+		    dorb_socket:return(Socket1),
 		    % Set a timer to maintain membership via heartbeats
 		    Tref = heartbeat_timer(SessionTimeout),
 		    maybe_start_workers(Sup, WorkerMfa, PTO),
@@ -202,21 +202,25 @@ join(#state{
 						 coordinator = Coordinator,
 						 tref = Tref}};
 		{kafka_error, inconsistent_partition_assignment_strategy=R} ->
+		    dorb_socket:return(Socket1),
 		    {stop, normal, R, State};
 		{kafka_error, unknown_partition_assignment_strategy=R} ->
+		    dorb_socket:return(Socket1),
 		    {stop, normal, R, State};
 		{kafka_error, unknown_consumer_id=R} ->
+		    dorb_socket:return(Socket1),
 		    {stop, normal, R, State};
 		{kafka_error, invalid_timeout=R} ->
+		    dorb_socket:return(Socket1),
 		    {stop, normal, R, State};
 		{kafka_error, _Error} = KE ->
 		    % Hit a Kafka error. Back off, and retry
-		    dorb_connection:return_socket(Socket1),
+		    dorb_socket:return(Socket1),
 		    timer:sleep(500),
 		    join(State, RBR-1, KE);
 		{error, _Error} = E ->
 		    % Hit a socket error (most probably a timeout)
-		    dorb_connection:return_socket(Socket1),
+		    dorb_socket:return_bad(Socket1),
 		    join(State, RBR-1, E)
 	    end;
 	{error, _Error} = E ->
@@ -231,16 +235,16 @@ commit_offset(Pairs, #state{
 			coordinator = Coordinator,
 			socket_timeout = SocketTimeout
 		       } = State, COR, _LastError) ->
-    {ok, Socket} = dorb_connection:get_socket(Coordinator),
+    {ok, Socket} = dorb_socket:get(Coordinator),
     case dorb_consumer_group:commit_offset(Socket, GroupId, Pairs,
 					   SocketTimeout) of
 	{ok, Res} ->
 	    % Got a commit offset from the cluster
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    {reply, {ok, Res}, member, State};
 	{error, _Error} = E ->
 	    % Hit a socket error (most probably a timeout)
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return_bad(Socket),
 	    commit_offset(Pairs, Socket, COR-1, E)
     end.
 
@@ -249,15 +253,15 @@ fetch_offset(Pairs, #state{
 		       coordinator = Coordinator,
 		       socket_timeout = SocketTimeout
 		      } = State, FOR, _LastError) ->
-    {ok, Socket} = dorb_connection:get_socket(Coordinator),
+    {ok, Socket} = dorb_socket:get(Coordinator),
     case dorb_consumer_group:fetch_offset(Socket, GroupId, Pairs,
 					  SocketTimeout) of
 	{ok, Res} ->
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    {reply, {ok, Res}, member, State};
 	{error, _Error} = E ->
 	% Hit a socket error (most probably a timeout)
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return_bad(Socket),
 	    fetch_offset(Pairs, State, FOR-1, E)
     end.
 
@@ -270,13 +274,13 @@ heartbeat(#state{
 	     session_timeout = SessionTimeout,
 	     rebalance_retries = RBR
 	    } = State) ->
-    {ok, Socket} = dorb_connection:get_socket(Coordinator),
+    {ok, Socket} = dorb_socket:get(Coordinator),
     case dorb_consumer_group:heartbeat(Socket, GroupId, GGI, ConsumerId,
 				       SocketTimeout) of
 	{ok, online} ->
 	    % Consumer group is still online. Set a new counter and continue
 	    TRef = heartbeat_timer(SessionTimeout),
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    {next_state, member, State#state{
 				   tref = TRef
 				  }};
@@ -286,13 +290,13 @@ heartbeat(#state{
 	    % indicates a bad configuration and the safest thing to do is to
 	    % shut down
 	    error_logger:info_msg("Invalid Consumer Id for Consumer Group"),
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    {stop, normal, State};
 	{kafka_error, illegal_generation}=R ->
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return(Socket),
 	    rejoin(State, R);
 	{error, _Error} ->
-	    dorb_connection:return_socket(Socket),
+	    dorb_socket:return_bad(Socket),
 	    case discover_coordinator(State, RBR, undefined) of
 		{ok, Coordinator1} ->
 		    % Found a new coordinator. Heartbeat it and maybe trigger a

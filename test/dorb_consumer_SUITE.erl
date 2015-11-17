@@ -26,7 +26,6 @@ init_per_suite(Config) ->
     [{group_name, base64:encode(crypto:strong_rand_bytes(10))}|Config].
 
 end_per_suite(Config) ->
-    dorb_socket:stop(?config(socket, Config)),
     Config.
 
 flow(Config) ->
