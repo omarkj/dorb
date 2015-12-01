@@ -126,7 +126,7 @@ send(#socket{pid = Pid}, Msg) ->
       Connection :: socket(),
       Msg :: dorb_msg:msg(),
       Timeout :: integer(),
-      Message :: dorb_parser:reply().
+      Message :: dorb_msg:reply().
 send_sync(Socket, Msg, Timeout) ->
     {ok, Ref} = send(Socket, Msg),
     receive
@@ -152,8 +152,8 @@ handle_call({send, Sender, {ApiKey, Msg}}, From,
     gen_server:reply(From, {ok, Ref}),
     case maybe_connect(Socket, Host, Port) of
 	{ok, Socket1} ->
-	    EncodedMsg = dorb_parser:encode(ApiKey, <<"dorb">>, CorrId,
-					    Msg),
+	    EncodedMsg = dorb_msg:encode(ApiKey, <<"dorb">>, CorrId,
+					 Msg),
 	    case send_message(Socket1, EncodedMsg) of
 		ok ->
 		    Waiter = #waiter{api_key = ApiKey,
@@ -259,7 +259,7 @@ parse_message(<<CorrId:32/signed-integer, Msg1/binary>>, CorrIds, Acc) ->
 	{ok, #waiter{api_key=ApiKey}=Waiter} ->
 	    % Parsed a message and found a corresponding CorrId. Add it to the
 	    % Acc and move parse some more.
-	    {ok, ParsedMessage} = dorb_parser:parse(ApiKey, Msg1),
+	    {ok, ParsedMessage} = dorb_msg:parse(ApiKey, Msg1),
 	    CorrIds1 = maps:remove(CorrId, CorrIds),
 	    {CorrIds1, [Waiter#waiter{message=ParsedMessage}|Acc]};
 	error ->
