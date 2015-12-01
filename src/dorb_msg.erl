@@ -8,7 +8,7 @@
 	 topic_metadata/1,
 	 offset_commit/5,
 	 offset_fetch/2,
-	 consumer_metadata/1,
+	 group_coordinator/1,
 	 join_group/5,
 	 heartbeat/3,
 	 leave_group/2,
@@ -178,10 +178,10 @@ offset_fetch(GroupId, Topics) ->
 			    || Partition <- Partitions]}]
 		  || {Topic, Partitions} <- Topics ]}]}.
 
--spec consumer_metadata(GroupId) -> {ApiKey, EncodeSpec} when
+-spec group_coordinator(GroupId) -> {ApiKey, EncodeSpec} when
       GroupId :: group_id(), ApiKey :: consumer_metadata_request(),
       EncodeSpec :: encode_spec().
-consumer_metadata(GroupId) ->
+group_coordinator(GroupId) ->
     {10, [{string, GroupId}]}.
 
 -spec join_group(GroupId, SessionTimeout, MemberId, ProtocolType,
