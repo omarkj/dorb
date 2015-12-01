@@ -69,6 +69,8 @@
 -type protocol_type() :: binary().
 -type protocol_name() :: binary().
 -type member_assignment() :: binary().
+-type group_assignment() :: [{member_id(), member_assignment()}].
+-type group_protocols() :: [{protocol_name(), metadata()}].
 
 -export_type([req/0,
 	      api_key/0,
@@ -188,9 +190,8 @@ group_coordinator(GroupId) ->
 		 GroupProtocols) -> {ApiKey, EncodeSpec} when
       GroupId :: group_id(), SessionTimeout :: dtimeout(),
       MemberId :: member_id(), ProtocolType :: protocol_type(),
-      GroupProtocols :: [{ProtocolName, ProtocolMetadata}],
-      ProtocolName :: protocol_name(), ProtocolMetadata :: metadata(),
-      ApiKey :: join_group_request(), EncodeSpec :: encode_spec().
+      GroupProtocols :: group_protocols(), ApiKey :: join_group_request(),
+      EncodeSpec :: encode_spec().
 join_group(GroupId, SessionTimeout, MemberId, ProtocolType, GroupProtocols) ->
     {11, [{string, GroupId},
 	  {int32, SessionTimeout},
@@ -220,8 +221,7 @@ leave_group(GroupId, MemberId) ->
 			{ApiKey, EncodeSpec} when
       GroupId :: group_id(), GenerationId :: generation_id(),
       MemberId :: member_id(),
-      GroupAssignment :: [{MemberId, MemberAssignment}],
-      MemberAssignment :: member_assignment(), ApiKey :: sync_group_request(),
+      GroupAssignment :: group_assignment(), ApiKey :: sync_group_request(),
       EncodeSpec :: encode_spec().
 sync_group(GroupId, GenerationId, MemberId, GroupAssignment) ->
     {14, [{string, GroupId},
