@@ -98,4 +98,7 @@ error(24) ->
 error(25) ->
     unknown_consumer_id;
 error(26) ->
-    invalid_timeout.
+    invalid_timeout;
+error(Other) ->
+    {unknown_code, Other}.
+
