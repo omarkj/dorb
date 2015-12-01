@@ -2,12 +2,18 @@
 
 -export([coordinator/2,
 	 coordinator/3,
-	 join_group/5,
-	 join_group/6]).
+	 join/5,
+	 join/6,
+	 sync/3,
+	 sync/2,
+	 heartbeat/1,
+	 heartbeat/2,
+	 leave/1,
+	 leave/2]).
 
 -record(coor, {host :: inet:ip_address()|inet:hostname(),
 	       port :: inet:port_number(),
-	       id :: non_neg_integer() }).
+	       id :: non_neg_integer()}).
 
 -record(cg, {group_id :: binary(),
 	     member_id :: binary(),
@@ -39,54 +45,112 @@ coordinator(Connection, GroupId, Timeout) ->
 % @doc Join a group. The consumer issues a join group request advertising what
 % partition protocols it supports. The response to this request might indicate
 % that consumer becomes the leader.
-join_group(SessionTimeout, MemberId, ProtocolType, GroupProtocols, Cg) ->
-    join_group(SessionTimeout, MemberId, ProtocolType, GroupProtocols, Cg,
-	       ?TIMEOUT).
+join(SessionTimeout, MemberId, ProtocolType, GroupProtocols, Cg) ->
+    join(SessionTimeout, MemberId, ProtocolType, GroupProtocols, Cg,
+	 ?TIMEOUT).
 
--spec join_group(dorb_msg:session_timeout(), dorb_msg:member_id(),
-		 dorb_msg:protocol_type(), term(), cg(), integer()) ->
-			{ok, {joined, member, integer()}, cg()}|
-			{ok, {joined, leader, [#{member_id => binary(),
-						 member_metadata => binary()}],
-			      integer()}, cg()}|
-			{error, dorb_error:msg(), cg()}|
-			{conn_error, term(), cg()}.
-join_group(SessionTimeout, MemberId, ProtocolType, GroupProtocols,
-	   #cg{group_id = Gid, coor = Coor} = Cg,
-	   Timeout) ->
+-spec join(dorb_msg:session_timeout(), dorb_msg:member_id(),
+	   dorb_msg:protocol_type(), dorb_msg:group_protocols(), cg(),
+	   integer()) ->
+		  {ok, {joining, member, integer()}, cg()}|
+		  {ok, {joining, leader, [#{member_id => binary(),
+					    member_metadata => binary()}],
+			integer()}, cg()}|
+		  {error, dorb_error:msg(), cg()}|
+		  {conn_error, term(), cg()}.
+join(SessionTimeout, MemberId, ProtocolType, GroupProtocols,
+     #cg{group_id = Gid, coor = Coor} = Cg,
+     Timeout) ->
     Message = dorb_msg:join_group(Gid, SessionTimeout, MemberId, ProtocolType,
 				  GroupProtocols),
     Response = send_sync(Coor, Message, Timeout),
-    join_group_response(Response, Cg#cg{session_timeout = SessionTimeout}).
+    join_response(Response, Cg#cg{session_timeout = SessionTimeout}).
 
-join_group_response(#{error_code     := 0,
-		      generation_id  := Geid,
-		      group_protocol := Gproto,
-		      leader_id      := Lid,
-		      member_id      := Mid,
-		      members        := []},
-		    #cg{session_timeout = St} = Cg) ->
-    % This is not a leader
-    % @todo indicate to the caller to set a timeout to SessionTimeout since that
-    % is the maximum time the client should wait to 
-    {ok, {joined, member, St}, Cg#cg{member_id = Mid,
-				     leader_id = Lid,
-				     generation_id = Geid,
-				     group_protocol = Gproto}};
-join_group_response(#{error_code := 0,
-		      generation_id := Geid,
-		      group_protocol := Gproto,
-		      leader_id := Lid,
-		      member_id := Mid,
-		      members := Members}, #cg{session_timeout = St} = Cg) ->
-    % This is a leader.
-    {ok, {joined, leader, Members, St}, Cg#cg{member_id = Mid,
-					      leader_id = Lid,
-					      generation_id = Geid,
-					      group_protocol = Gproto}};
-join_group_response(#{error_code := ErrorCode}, Cg) ->
+sync(GroupAssignment, Cg) ->
+    sync(GroupAssignment, Cg, ?TIMEOUT).
+
+-spec sync(dorb_msg:group_assignment(), cg(), integer()) ->
+		  {ok, {stable, binary()}, cg()}|
+		  {error, dorb_error:msg(), cg()}|{conn_error, term(), cg()}.
+sync(GroupAssignment, #cg{group_id = GroupId, generation_id = GenerationId,
+			  member_id = MemberId, coor = Coor} = Cg, Timeout) ->
+    Message = dorb_msg:sync_group(GroupId, GenerationId, MemberId,
+				  GroupAssignment),
+    Response = send_sync(Coor, Message, Timeout),
+    sync_response(Response, Cg).
+
+heartbeat(Cg) ->
+    heartbeat(Cg, ?TIMEOUT).
+
+-spec heartbeat(cg(), integer()) ->
+		       {ok, cg()}|{error, dorb_error:msg()}|
+		       {conn_error, term(), cg()}.
+heartbeat(#cg{group_id = GroupId, generation_id = GenerationId,
+	      member_id = MemberId, coor = Coor} = Cg, Timeout) ->
+    Message = dorb_msg:heartbeat(GroupId, GenerationId, MemberId),
+    Response = send_sync(Coor, Message, Timeout),
+    heartbeat_response(Response, Cg).
+
+leave(Cg) ->
+    leave(Cg, ?TIMEOUT).
+
+-spec leave(cg(), integer()) ->
+		   {ok, cg()}|{error, dorb_error:msg()}|
+		   {conn_error, term(), cg()}.
+leave(#cg{coor = Coor, group_id = GroupId, member_id = MemberId} = Cg,
+      Timeout) ->
+    Message = dorb_msg:leave_group(GroupId, MemberId),
+    Response = send_sync(Coor, Message, Timeout),
+    leave_response(Response, Cg).
+
+leave_response(#{error_code := 0}, Cg) ->
+    {ok, Cg};
+leave_response(#{error_code := ErrorCode}, Cg) ->
     {error, dorb_error:error(ErrorCode), Cg};
-join_group_response({conn_error, Error}, Cg) ->
+leave_response({conn_error, Error}, Cg) ->
+    {conn_error, Error, Cg}.
+
+heartbeat_response(#{error_code := 0}, Cg) ->
+    {ok, Cg};
+heartbeat_response(#{error_code := ErrorCode}, Cg) ->
+    {error, dorb_error:error(ErrorCode), Cg};
+heartbeat_response({conn_error, Error}, Cg) ->
+    {conn_error, Error, Cg}.
+
+sync_response(#{error_code        := 0,
+		member_assignment := MemberAssignment}, Cg) ->
+    {ok, {stable, MemberAssignment}, Cg};
+sync_response(#{error_coder := ErrorCode}, Cg) ->
+    {error, dorb_error:error(ErrorCode), Cg};
+sync_response({conn_error, Error}, Cg) ->
+    {conn_error, Error, Cg}.
+
+join_response(#{error_code     := 0,
+		generation_id  := Geid,
+		group_protocol := Gproto,
+		leader_id      := Lid,
+		member_id      := Mid,
+		members        := []},
+	      #cg{session_timeout = St} = Cg) ->
+    % This is not a leader
+    {ok, {joining, member, St}, Cg#cg{member_id = Mid,
+				      leader_id = Lid,
+				      generation_id = Geid,
+				      group_protocol = Gproto}};
+join_response(#{error_code := 0,
+		generation_id := Geid,
+		group_protocol := Gproto,
+		leader_id := Lid,
+		member_id := Mid,
+		members := Members}, #cg{session_timeout = St} = Cg) ->
+    % This is a leader.
+    {ok, {joining, leader, Members, St}, Cg#cg{member_id = Mid,
+					       leader_id = Lid,
+					       generation_id = Geid,
+					       group_protocol = Gproto}};
+join_response(#{error_code := ErrorCode}, Cg) ->
+    {error, dorb_error:error(ErrorCode), Cg};
+join_response({conn_error, Error}, Cg) ->
     {conn_error, Error, Cg}.
 
 coordinator_response({ok, #{error_code       := 0,
