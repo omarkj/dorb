@@ -1,9 +1,10 @@
 -module(dorb_cg).
 
--export([coordinator/2,
+-export([init/5,
+	 coordinator/2,
 	 coordinator/3,
-	 join/5,
-	 join/6,
+	 join/1,
+	 join/2,
 	 sync/3,
 	 sync/2,
 	 heartbeat/1,
@@ -15,12 +16,14 @@
 	       port :: inet:port_number(),
 	       id   :: non_neg_integer()}).
 
--record(cg, {group_id        :: binary(),
-	     member_id       :: binary(),
-	     leader_id       :: binary(),
-	     generation_id   :: integer(),
-	     group_protocol  :: binary(),
-	     session_timeout :: non_neg_integer(),
+-record(cg, {group_id        :: dorb_msg:group_id(),
+	     member_id       :: dorb_msg:member_id(),
+	     leader_id       :: dorb_msg:leader_id(),
+	     generation_id   :: dorb_msg:generation_id(),
+	     group_protocol  :: dorb_msg:group_protocol(),
+	     group_protocols :: dorb_msg:group_protocols(),
+	     session_timeout :: dorb_msg:session_timeout(),
+	     protocol_type   :: dorb_msg:protocol_type(),
 	     coor            :: #coor{}}).
 
 -opaque cg() :: #cg{}.
@@ -28,39 +31,47 @@
 
 -define(TIMEOUT, 5000).
 
+-spec init(dorb_msg:session_timeout(), dorb_msg:group_id(), 
+	   dorb_msg:member_id(), dorb_msg:protocol_type(),
+	   dorb_msg:group_protocols()) -> {ok, cg()}.
+init(SessionTimeout, GroupId, MemberId, ProtocolType, GroupProtocols) ->
+    {ok, #cg{session_timeout=SessionTimeout,
+	     group_id=GroupId,
+	     member_id=MemberId,
+	     protocol_type=ProtocolType,
+	     group_protocols=GroupProtocols}}.
+
 % @doc Discover the coordinator for this particular group. If this group does
 % not exists it will be created, and a coordinator will be returned. This does
 % not retry - that's something the caller should do.
-coordinator(Connection, GroupId) ->
-    coordinator(Connection, GroupId, ?TIMEOUT).
+coordinator(Connection, Cg) ->
+    coordinator(Connection, Cg, ?TIMEOUT).
 
--spec coordinator(dorb_socket:socket(), dorb_msg:group_id(), integer()) ->
-			 {dorb_socket:socket(), {ok, cg()}|
-			  {error, dorb_error:msg()}}.
-coordinator(Connection, GroupId, Timeout) ->
+-spec coordinator(dorb_socket:socket(), cg(), integer()) ->
+			 {dorb_socket:socket(),
+			  {ok, cg()}|{error, dorb_error:msg()}|
+			  {conn_error, term()}}.
+coordinator(Connection, #cg{group_id=GroupId}=Cg, Timeout) ->
     Message = dorb_msg:group_coordinator(GroupId),
     Response = dorb_socket:send_sync(Connection, Message, Timeout),
-    coordinator_response(Response, Connection, #cg{group_id=GroupId}).
+    coordinator_response(Response, Connection, Cg).
 
 % @doc Join a group. The consumer issues a join group request advertising what
 % partition protocols it supports. The response to this request might indicate
 % that consumer becomes the leader.
-join(SessionTimeout, MemberId, ProtocolType, GroupProtocols, Cg) ->
-    join(SessionTimeout, MemberId, ProtocolType, GroupProtocols, Cg,
-	 ?TIMEOUT).
+join(Cg) ->
+    join(Cg, ?TIMEOUT).
 
--spec join(dorb_msg:session_timeout(), dorb_msg:member_id(),
-	   dorb_msg:protocol_type(), dorb_msg:group_protocols(), cg(),
-	   integer()) ->
+-spec join(cg(), integer()) ->
 		  {ok, {joining, member, integer()}, cg()}|
 		  {ok, {joining, leader, [#{member_id => binary(),
 					    member_metadata => binary()}],
 			integer()}, cg()}|
 		  {error, dorb_error:msg(), cg()}|
 		  {conn_error, term(), cg()}.
-join(SessionTimeout, MemberId, ProtocolType, GroupProtocols,
-     #cg{group_id = Gid, coor = Coor} = Cg,
-     Timeout) ->
+join(#cg{group_id=Gid, coor=Coor, session_timeout=SessionTimeout,
+	 member_id=MemberId, protocol_type=ProtocolType,
+	 group_protocols=GroupProtocols}=Cg, Timeout) ->
     Message = dorb_msg:join_group(Gid, SessionTimeout, MemberId, ProtocolType,
 				  GroupProtocols),
     Response = send_sync(Coor, Message, Timeout),
@@ -142,9 +153,9 @@ join_response(#{error_code     := 0,
 		members        := []},
 	      #cg{session_timeout = St} = Cg) ->
     % This is not a leader
-    {ok, {joining, member, St}, Cg#cg{member_id = Mid,
-				      leader_id = Lid,
-				      generation_id = Geid,
+    {ok, {joining, member, St}, Cg#cg{member_id      = Mid,
+				      leader_id      = Lid,
+				      generation_id  = Geid,
 				      group_protocol = Gproto}};
 join_response(#{error_code     := 0,
 		generation_id  := Geid,
@@ -190,7 +201,11 @@ send_sync(#coor{host = Host, port = Port}, Message, Timeout) ->
 -include_lib("eunit/include/eunit.hrl").
 -ifdef(TEST).
 
+-include("dorb.hrl").
+
 coordinator_test() ->
+    {ok, Cg} = init(5000, <<"group">>, <<>>, <<"consumer">>, [<<"range">>,
+							      <<>>]),
     meck:new(dorb_socket),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
@@ -198,8 +213,8 @@ coordinator_test() ->
 			       coordinator_id => 1,
 			       coordinator_host => "localhost",
 			       coordinator_port => 9092}} end),
-    Res = coordinator(connection, <<"group">>),
-    ?assertMatch({connection,
+    Res = coordinator(#socket{}, Cg),
+    ?assertMatch({#socket{},
 		  {ok, #cg{coor = #coor{host = "localhost",
 					port = 9092,
 					id = 1},
@@ -207,18 +222,20 @@ coordinator_test() ->
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
 			{ok, #{error_code => 16}} end),
-    Res1 = coordinator(connection, <<"group">>),
-    ?assertMatch({connection, {error, not_coordinator_for_consumer}}, Res1),
+    Res1 = coordinator(#socket{}, Cg),
+    ?assertMatch({#socket{}, {error, not_coordinator_for_consumer}}, Res1),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
 			{error, connerr} end),
-    Res2 = coordinator(connection, <<"group">>),
-    ?assertMatch({connection, {conn_error, connerr}}, Res2),
+    Res2 = coordinator(#socket{}, Cg),
+    ?assertMatch({#socket{}, {conn_error, timeout}}, Res2),
     meck:unload(dorb_socket).
 
 join_test() ->
     meck:new(dorb_socket),
-    Cg = #cg{group_id = <<"test">>, coor = #coor{}},
+    {ok, Cg0} = init(5000, <<"group">>, <<>>, <<"consumer">>, [<<"range">>,
+							       <<>>]),
+    Cg = Cg0#cg{coor = #coor{}},
     meck:expect(dorb_socket, get,
 		fun({undefined, undefined}) ->
 			{ok, connection}
@@ -233,7 +250,7 @@ join_test() ->
 			       member_id => 2,
 			       members => []}}
 		end),
-    Res = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
+    Res = join(Cg),
     ?assertMatch({ok, {joining, member, 5000},
 		  #cg{leader_id = 1,
 		      member_id = 2,
@@ -247,10 +264,12 @@ join_test() ->
 			       group_protocol => <<"range">>,
 			       leader_id => 1,
 			       member_id => 2,
-			       members => [{<<"node1">>, <<>>}]}}
+			       members => [#{member_id => <<"node1">>,
+					     member_metadata => <<>>}]}}
 		end),
-    Res1 = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
-    ?assertMatch({ok, {joining, leader, [{<<"node1">>, <<>>}], 5000},
+    Res1 = join(Cg),
+    ?assertMatch({ok, {joining, leader, [#{member_id := <<"node1">>,
+					   member_metadata := <<>>}], 5000},
 		  #cg{leader_id = 1,
 		      member_id = 2,
 		      generation_id = 1,
@@ -260,15 +279,15 @@ join_test() ->
 		fun(_Connection, _Message, _Timeout) ->
 			{ok, #{error_code => 16}}
 		end),
-    Res2 = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
+    Res2 = join(Cg),
     ?assertMatch({error, not_coordinator_for_consumer,
 		  #cg{session_timeout = 5000}}, Res2),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
 			{error, connerr} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
-    Res3 = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
-    ?assertMatch({conn_error, connerr, #cg{session_timeout = 5000}}, Res3),
+    Res3 = join(Cg),
+    ?assertMatch({conn_error, timeout, #cg{session_timeout = 5000}}, Res3),
     meck:validate(dorb_socket),
     meck:unload(dorb_socket).
 
@@ -299,7 +318,7 @@ sync_test() ->
 			{error, connerr} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res3 = sync([{<<"node1">>, <<"details">>}], Cg),
-    ?assertMatch({conn_error, connerr, Cg}, Res3),
+    ?assertMatch({conn_error, timeout, Cg}, Res3),
     meck:validate(dorb_socket),
     meck:unload(dorb_socket).
 
@@ -329,7 +348,7 @@ heartbeat_test() ->
 			{error, connerr} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res2 = heartbeat(Cg),
-    ?assertMatch({conn_error, connerr, Cg}, Res2),
+    ?assertMatch({conn_error, timeout, Cg}, Res2),
     meck:validate(dorb_socket),
     meck:unload(dorb_socket).
 
@@ -358,7 +377,7 @@ leave_test() ->
 			{error, connerr} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res2 = leave(Cg),
-    ?assertMatch({conn_error, connerr, Cg}, Res2),
+    ?assertMatch({conn_error, timeout, Cg}, Res2),
     meck:validate(dorb_socket),
     meck:unload(dorb_socket).
 
