@@ -19,6 +19,9 @@
 -record(cg, {group_id        :: dorb_msg:group_id(),
 	     member_id       :: dorb_msg:member_id(),
 	     leader_id       :: dorb_msg:leader_id(),
+	     status          :: leader|member,
+	     members         :: [#{member_id => binary(),
+				   member_metadata => binary()}],
 	     generation_id   :: dorb_msg:generation_id(),
 	     group_protocol  :: dorb_msg:group_protocol(),
 	     group_protocols :: dorb_msg:group_protocols(),
@@ -63,11 +66,7 @@ join(Cg) ->
     join(Cg, ?TIMEOUT).
 
 -spec join(cg(), integer()) ->
-		  {ok, {joining, member, integer()}, cg()}|
-		  {ok, {joining, leader, [#{member_id => binary(),
-					    member_metadata => binary()}],
-			integer()}, cg()}|
-		  {error, dorb_error:msg(), cg()}|
+		  {ok, cg()}|{error, dorb_error:msg(), cg()}|
 		  {conn_error, term(), cg()}.
 join(#cg{group_id=Gid, coor=Coor, session_timeout=SessionTimeout,
 	 member_id=MemberId, protocol_type=ProtocolType,
@@ -150,25 +149,26 @@ join_response(#{error_code     := 0,
 		group_protocol := Gproto,
 		leader_id      := Lid,
 		member_id      := Mid,
-		members        := []},
-	      #cg{session_timeout = St} = Cg) ->
+		members        := []}, Cg) ->
     % This is not a leader
-    {ok, {joining, member, St}, Cg#cg{member_id      = Mid,
-				      leader_id      = Lid,
-				      generation_id  = Geid,
-				      group_protocol = Gproto}};
+    {ok, Cg#cg{member_id      = Mid,
+	       leader_id      = Lid,
+	       generation_id  = Geid,
+	       status         = member,
+	       group_protocol = Gproto}};
 join_response(#{error_code     := 0,
 		generation_id  := Geid,
 		group_protocol := Gproto,
 		leader_id      := Lid,
 		member_id      := Mid,
-		members        := Members},
-	      #cg{session_timeout = St} = Cg) ->
+		members        := Members}, Cg) ->
     % This is a leader.
-    {ok, {joining, leader, Members, St}, Cg#cg{member_id = Mid,
-					       leader_id = Lid,
-					       generation_id = Geid,
-					       group_protocol = Gproto}};
+    {ok, Cg#cg{member_id      = Mid,
+	       leader_id      = Lid,
+	       generation_id  = Geid,
+	       status         = leader,
+	       members        = Members,
+	       group_protocol = Gproto}};
 join_response(#{error_code := ErrorCode}, Cg) ->
     {error, dorb_error:error(ErrorCode), Cg};
 join_response({conn_error, Error}, Cg) ->
@@ -226,7 +226,7 @@ coordinator_test() ->
     ?assertMatch({#socket{}, {error, not_coordinator_for_consumer}}, Res1),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
-			{error, connerr} end),
+			{error, timeout} end),
     Res2 = coordinator(#socket{}, Cg),
     ?assertMatch({#socket{}, {conn_error, timeout}}, Res2),
     meck:unload(dorb_socket).
@@ -251,11 +251,12 @@ join_test() ->
 			       members => []}}
 		end),
     Res = join(Cg),
-    ?assertMatch({ok, {joining, member, 5000},
+    ?assertMatch({ok,
 		  #cg{leader_id = 1,
 		      member_id = 2,
 		      generation_id = 1,
 		      session_timeout = 5000,
+		      status = member,
 		      group_protocol = <<"range">>}}, Res),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
@@ -268,12 +269,14 @@ join_test() ->
 					     member_metadata => <<>>}]}}
 		end),
     Res1 = join(Cg),
-    ?assertMatch({ok, {joining, leader, [#{member_id := <<"node1">>,
-					   member_metadata := <<>>}], 5000},
+    ?assertMatch({ok,
 		  #cg{leader_id = 1,
 		      member_id = 2,
 		      generation_id = 1,
 		      session_timeout = 5000,
+		      status = leader,
+		      members = [#{member_id := <<"node1">>,
+				   member_metadata := <<>>}],
 		      group_protocol = <<"range">>}}, Res1),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
@@ -284,7 +287,7 @@ join_test() ->
 		  #cg{session_timeout = 5000}}, Res2),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
-			{error, connerr} end),
+			{error, timeout} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res3 = join(Cg),
     ?assertMatch({conn_error, timeout, #cg{session_timeout = 5000}}, Res3),
@@ -315,7 +318,7 @@ sync_test() ->
     ?assertMatch({error, not_coordinator_for_consumer, Cg}, Res2),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
-			{error, connerr} end),
+			{error, timeout} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res3 = sync([{<<"node1">>, <<"details">>}], Cg),
     ?assertMatch({conn_error, timeout, Cg}, Res3),
@@ -345,7 +348,7 @@ heartbeat_test() ->
     ?assertMatch({error, not_coordinator_for_consumer, Cg}, Res1),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
-			{error, connerr} end),
+			{error, timeout} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res2 = heartbeat(Cg),
     ?assertMatch({conn_error, timeout, Cg}, Res2),
@@ -374,7 +377,7 @@ leave_test() ->
     ?assertMatch({error, not_coordinator_for_consumer, Cg}, Res1),
     meck:expect(dorb_socket, send_sync,
 		fun(_Connection, _Message, _Timeout) ->
-			{error, connerr} end),
+			{error, timeout} end),
     meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
     Res2 = leave(Cg),
     ?assertMatch({conn_error, timeout, Cg}, Res2),
