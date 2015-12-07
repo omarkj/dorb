@@ -146,12 +146,13 @@ join_response(#{error_code     := 0,
 				      leader_id = Lid,
 				      generation_id = Geid,
 				      group_protocol = Gproto}};
-join_response(#{error_code := 0,
-		generation_id := Geid,
+join_response(#{error_code     := 0,
+		generation_id  := Geid,
 		group_protocol := Gproto,
-		leader_id := Lid,
-		member_id := Mid,
-		members := Members}, #cg{session_timeout = St} = Cg) ->
+		leader_id      := Lid,
+		member_id      := Mid,
+		members        := Members},
+	      #cg{session_timeout = St} = Cg) ->
     % This is a leader.
     {ok, {joining, leader, Members, St}, Cg#cg{member_id = Mid,
 					       leader_id = Lid,
