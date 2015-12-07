@@ -13,15 +13,15 @@
 
 -record(coor, {host :: inet:ip_address()|inet:hostname(),
 	       port :: inet:port_number(),
-	       id :: non_neg_integer()}).
+	       id   :: non_neg_integer()}).
 
--record(cg, {group_id :: binary(),
-	     member_id :: binary(),
-	     leader_id :: binary(),
-	     generation_id :: integer(),
-	     group_protocol :: binary(),
+-record(cg, {group_id        :: binary(),
+	     member_id       :: binary(),
+	     leader_id       :: binary(),
+	     generation_id   :: integer(),
+	     group_protocol  :: binary(),
 	     session_timeout :: non_neg_integer(),
-	     coor :: #coor{}}).
+	     coor            :: #coor{}}).
 
 -opaque cg() :: #cg{}.
 -export_type([cg/0]).
@@ -120,7 +120,7 @@ heartbeat_response({conn_error, Error}, Cg) ->
 sync_response(#{error_code        := 0,
 		member_assignment := MemberAssignment}, Cg) ->
     {ok, {stable, MemberAssignment}, Cg};
-sync_response(#{error_coder := ErrorCode}, Cg) ->
+sync_response(#{error_code := ErrorCode}, Cg) ->
     {error, dorb_error:error(ErrorCode), Cg};
 sync_response({conn_error, Error}, Cg) ->
     {conn_error, Error, Cg}.
@@ -168,10 +168,188 @@ coordinator_response({error, Error}, Connection, _) ->
 send_sync(#coor{host = Host, port = Port}, Message, Timeout) ->
     {ok, Connection} = dorb_socket:get({Host, Port}),
     case dorb_socket:send_sync(Connection, Message, Timeout) of
-	{ok, Message} ->
-	    dorb_socket:return_connection(Connection),
-	    Message;
+	{ok, Message1} ->
+	    dorb_socket:return(Connection),
+	    Message1;
 	{error, Error} ->
 	    dorb_socket:return_bad(Connection),
 	    {conn_error, Error}
     end.
+
+%% Tests
+-include_lib("eunit/include/eunit.hrl").
+-ifdef(TEST).
+
+coordinator_test() ->
+    meck:new(dorb_socket),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 0,
+			       coordinator_id => 1,
+			       coordinator_host => "localhost",
+			       coordinator_port => 9092}} end),
+    Res = coordinator(connection, <<"group">>),
+    ?assertMatch({connection,
+		  {ok, #cg{coor = #coor{host = "localhost",
+					port = 9092,
+					id = 1},
+			   group_id = <<"group">>}}}, Res),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 16}} end),
+    Res1 = coordinator(connection, <<"group">>),
+    ?assertMatch({connection, {error, not_coordinator_for_consumer}}, Res1),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{error, connerr} end),
+    Res2 = coordinator(connection, <<"group">>),
+    ?assertMatch({connection, {conn_error, connerr}}, Res2),
+    meck:unload(dorb_socket).
+
+join_test() ->
+    meck:new(dorb_socket),
+    Cg = #cg{group_id = <<"test">>, coor = #coor{}},
+    meck:expect(dorb_socket, get,
+		fun({undefined, undefined}) ->
+			{ok, connection}
+		end),
+    meck:expect(dorb_socket, return, fun(connection) -> ok end),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 0,
+			       generation_id => 1,
+			       group_protocol => <<"range">>,
+			       leader_id => 1,
+			       member_id => 2,
+			       members => []}}
+		end),
+    Res = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
+    ?assertMatch({ok, {joining, member, 5000},
+		  #cg{leader_id = 1,
+		      member_id = 2,
+		      generation_id = 1,
+		      session_timeout = 5000,
+		      group_protocol = <<"range">>}}, Res),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 0,
+			       generation_id => 1,
+			       group_protocol => <<"range">>,
+			       leader_id => 1,
+			       member_id => 2,
+			       members => [{<<"node1">>, <<>>}]}}
+		end),
+    Res1 = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
+    ?assertMatch({ok, {joining, leader, [{<<"node1">>, <<>>}], 5000},
+		  #cg{leader_id = 1,
+		      member_id = 2,
+		      generation_id = 1,
+		      session_timeout = 5000,
+		      group_protocol = <<"range">>}}, Res1),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 16}}
+		end),
+    Res2 = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
+    ?assertMatch({error, not_coordinator_for_consumer,
+		  #cg{session_timeout = 5000}}, Res2),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{error, connerr} end),
+    meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
+    Res3 = join(5000, <<"member">>, <<"test">>, [{<<"range">>, <<>>}], Cg),
+    ?assertMatch({conn_error, connerr, #cg{session_timeout = 5000}}, Res3),
+    meck:validate(dorb_socket),
+    meck:unload(dorb_socket).
+
+sync_test() ->
+    meck:new(dorb_socket),
+    Cg = #cg{group_id = <<"test">>, generation_id = 1, member_id = <<"member">>,
+	     coor = #coor{}},
+    meck:expect(dorb_socket, get,
+		fun({undefined, undefined}) ->
+			{ok, connection}
+		end),
+    meck:expect(dorb_socket, return, fun(connection) -> ok end),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 0,
+			       member_assignment => <<"sync">>}}
+		end),
+    Res = sync([{<<"node1">>, <<"details">>}], Cg),
+    ?assertMatch({ok, {stable, <<"sync">>}, Cg}, Res),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 16}}
+		end),
+    Res2 = sync([{<<"node1">>, <<"details">>}], Cg),
+    ?assertMatch({error, not_coordinator_for_consumer, Cg}, Res2),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{error, connerr} end),
+    meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
+    Res3 = sync([{<<"node1">>, <<"details">>}], Cg),
+    ?assertMatch({conn_error, connerr, Cg}, Res3),
+    meck:validate(dorb_socket),
+    meck:unload(dorb_socket).
+
+heartbeat_test() ->
+    meck:new(dorb_socket),
+    Cg = #cg{group_id = <<"test">>, generation_id = 1, member_id = <<"member">>,
+	     coor = #coor{}},
+    meck:expect(dorb_socket, get,
+		fun({undefined, undefined}) ->
+			{ok, connection}
+		end),
+    meck:expect(dorb_socket, return, fun(connection) -> ok end),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 0}}
+		end),
+    Res = heartbeat(Cg),
+    ?assertMatch({ok, Cg}, Res),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 16}}
+		end),
+    Res1 = heartbeat(Cg),
+    ?assertMatch({error, not_coordinator_for_consumer, Cg}, Res1),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{error, connerr} end),
+    meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
+    Res2 = heartbeat(Cg),
+    ?assertMatch({conn_error, connerr, Cg}, Res2),
+    meck:validate(dorb_socket),
+    meck:unload(dorb_socket).
+
+leave_test() ->
+    Cg = #cg{group_id = <<"test">>, generation_id = 1, member_id = <<"member">>,
+	     coor = #coor{}},
+    meck:expect(dorb_socket, get,
+		fun({undefined, undefined}) ->
+			{ok, connection}
+		end),
+    meck:expect(dorb_socket, return, fun(connection) -> ok end),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 0}}
+		end),
+    Res = leave(Cg),
+    ?assertMatch({ok, Cg}, Res),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{ok, #{error_code => 16}}
+		end),
+    Res1 = leave(Cg),
+    ?assertMatch({error, not_coordinator_for_consumer, Cg}, Res1),
+    meck:expect(dorb_socket, send_sync,
+		fun(_Connection, _Message, _Timeout) ->
+			{error, connerr} end),
+    meck:expect(dorb_socket, return_bad, fun(connection) -> ok end),
+    Res2 = leave(Cg),
+    ?assertMatch({conn_error, connerr, Cg}, Res2),
+    meck:validate(dorb_socket),
+    meck:unload(dorb_socket).
+
+-endif.
