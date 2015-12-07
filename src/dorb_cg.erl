@@ -66,6 +66,9 @@ join(SessionTimeout, MemberId, ProtocolType, GroupProtocols,
     Response = send_sync(Coor, Message, Timeout),
     join_response(Response, Cg#cg{session_timeout = SessionTimeout}).
 
+% @doc Sync the group. If the caller is the leader it should include the group
+% assigment of all member nodes. If the caller is not the leader it should not
+% include any group assigmnet information.
 sync(GroupAssignment, Cg) ->
     sync(GroupAssignment, Cg, ?TIMEOUT).
 
@@ -82,6 +85,8 @@ sync(GroupAssignment, #cg{group_id = GroupId, generation_id = GenerationId,
 heartbeat(Cg) ->
     heartbeat(Cg, ?TIMEOUT).
 
+% @doc A caller needs to call heartbeats at minimum once every SessionTimeout
+% but should be called a bit more often because of latency, etc.
 -spec heartbeat(cg(), integer()) ->
 		       {ok, cg()}|{error, dorb_error:msg()}|
 		       {conn_error, term(), cg()}.
@@ -94,6 +99,10 @@ heartbeat(#cg{group_id = GroupId, generation_id = GenerationId,
 leave(Cg) ->
     leave(Cg, ?TIMEOUT).
 
+% @doc A member can leave the group two ways; by no longer sending heartbeats or
+% by sending the leave request. The leave requests minimizes the time it takes
+% to rebalance the group from SessionTimeout + rebalance time to just rebalance
+% time.
 -spec leave(cg(), integer()) ->
 		   {ok, cg()}|{error, dorb_error:msg()}|
 		   {conn_error, term(), cg()}.
